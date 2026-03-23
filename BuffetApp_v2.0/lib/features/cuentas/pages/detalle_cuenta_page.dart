@@ -585,8 +585,9 @@ class _DetalleCuentaPageState extends State<DetalleCuentaPage> {
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: AppColors.infoDim,
+                      color: AppColors.info.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: AppColors.info.withValues(alpha: 0.35)),
                     ),
                     child: Row(
                       children: [
@@ -608,7 +609,9 @@ class _DetalleCuentaPageState extends State<DetalleCuentaPage> {
                   
                   // Tabla de movimientos
                   DataTable(
-                    headingRowColor: WidgetStateProperty.all(AppColors.bgElevated),
+                    headingRowColor: WidgetStateProperty.all(
+                      Theme.of(context).colorScheme.surfaceContainerHighest,
+                    ),
                     columns: const [
                       DataColumn(label: Text('Fecha', style: TextStyle(fontWeight: FontWeight.bold))),
                       DataColumn(label: Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold))),
@@ -699,8 +702,9 @@ class _DetalleCuentaPageState extends State<DetalleCuentaPage> {
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: AppColors.ingresoDim,
+                      color: AppColors.ingreso.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: AppColors.ingreso.withValues(alpha: 0.35)),
                     ),
                     child: Row(
                       children: [

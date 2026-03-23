@@ -211,6 +211,11 @@ class AcuerdosService {
         'dispositivo_id': dispositivoId,
         'created_ts': now,
       });
+
+      // Generar compromisos automáticamente si se solicitó (no aplica a acuerdos POR_EVENTO)
+      if (generaCompromisos && !esPorEvento) {
+        await generarCompromisos(id);
+      }
       
       return id;
     } catch (e, stack) {

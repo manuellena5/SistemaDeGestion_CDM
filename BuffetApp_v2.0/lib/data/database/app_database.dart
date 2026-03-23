@@ -90,7 +90,7 @@ class AppDatabase {
     _db = await factory.openDatabase(
       dbPath,
       options: OpenDatabaseOptions(
-        version: 31, // v31: limpiar cuotas POR_EVENTO corruptas
+        version: 33, // v33: obs_post_cierre en caja_diaria
         onConfigure: _onConfigure,
         onCreate: _onCreate,
         onUpgrade: _onUpgrade,
@@ -343,6 +343,33 @@ class AppDatabase {
     if (oldVersion < 31) {
       await _migrateV31LimpiarCuotasPorEvento(db);
     }
+
+    // Migración a versión 32: subcategorías MOVILIDAD-APORTES Y GASTOS
+    if (oldVersion < 32) {
+      await _migrateV32SubcategoriasMovilidad(db);
+    }
+
+    // Migración a versión 33: obs_post_cierre en caja_diaria
+    if (oldVersion < 33) {
+      await _migrateV33ObsPostCierre(db);
+    }
+  }
+
+  static Future<void> _migrateV33ObsPostCierre(Database db) async {
+    try {
+      final cols = await db.rawQuery('PRAGMA table_info(caja_diaria)');
+      final colNames = cols.map((c) => c['name'] as String).toSet();
+      if (!colNames.contains('obs_post_cierre')) {
+        await db.execute('ALTER TABLE caja_diaria ADD COLUMN obs_post_cierre TEXT');
+      }
+      if (!colNames.contains('obs_post_cierre_ts')) {
+        await db.execute('ALTER TABLE caja_diaria ADD COLUMN obs_post_cierre_ts TEXT');
+      }
+      print('✓ Migración v33: obs_post_cierre / obs_post_cierre_ts agregadas a caja_diaria');
+    } catch (e, st) {
+      print('⚠ Error en migración v33: $e');
+      await logLocalError(scope: 'db.migrateV33', error: e.toString(), stackTrace: st);
+    }
   }
 
   /// Migración v29: Módulo Eventos CDM.
@@ -537,6 +564,45 @@ class AppDatabase {
       print('⚠ Error en migración v31: $e');
       await logLocalError(
         scope: 'db.migration.v31',
+        error: e.toString(),
+        stackTrace: stack,
+      );
+    }
+  }
+
+  /// Migración v32: Inserta subcategorías de Movilidad/Aportes (MOAP).
+  /// Crea 'Viático (Dinero)' (ARS) y 'Combustible' (LTS) bajo MOAP.
+  static Future<void> _migrateV32SubcategoriasMovilidad(Database db) async {
+    try {
+      print('🚀 Migración v32: subcategorías MOAP...');
+      final cats = await db.query(
+        'categoria_movimiento',
+        columns: ['id'],
+        where: 'codigo = ?',
+        whereArgs: ['MOAP'],
+      );
+      if (cats.isEmpty) {
+        print('⚠ Categoría MOAP no encontrada, saltando migración v32');
+        return;
+      }
+      final moapId = cats.first['id'] as int;
+      final ts = DateTime.now().toUtc().millisecondsSinceEpoch;
+      const subcats = [
+        {'nombre': 'Viático (Dinero)', 'requiere_unidad': 0, 'unidad_default': 'ARS', 'orden': 1},
+        {'nombre': 'Combustible',       'requiere_unidad': 1, 'unidad_default': 'ARS', 'orden': 2},
+      ];
+      for (final s in subcats) {
+        await db.rawInsert('''
+          INSERT OR IGNORE INTO subcategorias
+            (categoria_id, nombre, requiere_unidad, unidad_default, activa, orden, created_ts)
+          VALUES (?, ?, ?, ?, 1, ?, ?)
+        ''', [moapId, s['nombre'], s['requiere_unidad'], s['unidad_default'], s['orden'], ts]);
+      }
+      print('✓ Migración v32 completada');
+    } catch (e, stack) {
+      print('⚠ Error en migración v32: $e');
+      await logLocalError(
+        scope: 'db.migration.v32',
         error: e.toString(),
         stackTrace: stack,
       );
@@ -1404,7 +1470,10 @@ class AppDatabase {
         descripcion_evento TEXT,
         observaciones_apertura TEXT,
         obs_cierre TEXT,
+        obs_post_cierre TEXT,
+        obs_post_cierre_ts TEXT,
         sync_estado TEXT NOT NULL DEFAULT 'PENDIENTE' CHECK (sync_estado IN ('PENDIENTE','SINCRONIZADA','ERROR')),
+        evento_cdm_id INTEGER REFERENCES eventos(id),
         created_ts INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000),
         updated_ts INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)
       )
@@ -1535,6 +1604,11 @@ class AppDatabase {
         unidad TEXT NOT NULL DEFAULT 'ARS' CHECK (unidad IN ('ARS','LTS')),
         es_adhesion INTEGER NOT NULL DEFAULT 0,
         subcategoria_id INTEGER REFERENCES subcategorias(id),
+        es_por_evento INTEGER NOT NULL DEFAULT 0,
+        monto_titular REAL,
+        monto_suplente REAL,
+        monto_no_jugo REAL NOT NULL DEFAULT 0,
+        partidos_esperados_mes INTEGER DEFAULT 4,
         sync_estado TEXT NOT NULL DEFAULT 'PENDIENTE' CHECK (sync_estado IN ('PENDIENTE','SINCRONIZADA','ERROR')),
         created_ts INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000),
         updated_ts INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000),
@@ -1643,6 +1717,8 @@ class AppDatabase {
         estado TEXT NOT NULL DEFAULT 'ESPERADO' CHECK (estado IN ('ESPERADO','CONFIRMADO','CANCELADO')),
         monto_real REAL,
         observacion_cancelacion TEXT,
+        cantidad_litros REAL,
+        precio_litro_ars REAL,
         created_ts INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000),
         updated_ts INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000),
         FOREIGN KEY (compromiso_id) REFERENCES compromisos(id) ON DELETE CASCADE,
@@ -1673,6 +1749,47 @@ class AppDatabase {
         created_ts INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000),
         updated_ts INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000),
         FOREIGN KEY (unidad_gestion_id) REFERENCES unidades_gestion(id)
+      )
+    ''');
+
+    // eventos (partidos, cenas, torneos — Módulo Eventos CDM)
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS eventos (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        unidad_gestion_id INTEGER NOT NULL REFERENCES unidades_gestion(id),
+        tipo              TEXT NOT NULL DEFAULT 'PARTIDO'
+                          CHECK (tipo IN ('PARTIDO','CENA','TORNEO','OTRO')),
+        fecha             TEXT NOT NULL,
+        hora              TEXT,
+        titulo            TEXT NOT NULL,
+        rival             TEXT,
+        localidad         TEXT CHECK (localidad IN ('LOCAL','VISITANTE')),
+        lugar             TEXT,
+        estado            TEXT NOT NULL DEFAULT 'PROGRAMADO'
+                          CHECK (estado IN ('PROGRAMADO','REALIZADO','SUSPENDIDO','CANCELADO')),
+        descripcion       TEXT,
+        eliminado         INTEGER NOT NULL DEFAULT 0,
+        sync_estado       TEXT NOT NULL DEFAULT 'PENDIENTE'
+                          CHECK (sync_estado IN ('PENDIENTE','SINCRONIZADA','ERROR')),
+        created_ts        INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000),
+        updated_ts        INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)
+      )
+    ''');
+
+    // evento_asistencia (asistencia de jugadores a eventos)
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS evento_asistencia (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        evento_id           INTEGER NOT NULL REFERENCES eventos(id),
+        entidad_plantel_id  INTEGER NOT NULL REFERENCES entidades_plantel(id),
+        acuerdo_id          INTEGER REFERENCES acuerdos(id),
+        condicion           TEXT NOT NULL
+                            CHECK (condicion IN ('TITULAR','SUPLENTE','NO_JUGO')),
+        monto               REAL NOT NULL DEFAULT 0,
+        movimiento_id       INTEGER REFERENCES evento_movimiento(id),
+        sync_estado         TEXT NOT NULL DEFAULT 'PENDIENTE',
+        created_ts          INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000),
+        UNIQUE(evento_id, entidad_plantel_id)
       )
     ''');
 
@@ -1977,6 +2094,7 @@ class AppDatabase {
     await _seedFrecuencias(db);
     await _seedCategoriasMovimiento(db);
     await _seedSubcategoriasAdhesion(db);
+    await _seedSubcategoriasMovilidad(db);
     await _seedProductos(db);
   }
 
@@ -2060,52 +2178,49 @@ class AppDatabase {
   static Future<void> _seedCategoriasMovimiento(Database db) async {
     const categorias = [
       // INGRESOS
-      {'codigo': 'ENTR', 'nombre': 'ENTRADAS', 'tipo': 'INGRESO', 'icono': 'confirmation_number', 'activa': 1},
-      {'codigo': 'UTBP', 'nombre': 'UTILIDAD BAR Y PARRILLA', 'tipo': 'INGRESO', 'icono': 'restaurant', 'activa': 1},
-      {'codigo': 'VENT', 'nombre': 'VENTA NÚMERO EN CANCHA', 'tipo': 'INGRESO', 'icono': 'sports_soccer', 'activa': 1},
-      {'codigo': 'TRIB', 'nombre': 'TRIBUNA', 'tipo': 'INGRESO', 'icono': 'stadium', 'activa': 1},
+      {'codigo': 'ENTR', 'nombre': 'ENTRADAS | CANCHA', 'tipo': 'INGRESO', 'icono': 'confirmation_number', 'activa': 1},
+      {'codigo': 'UTBP', 'nombre': 'UTILIDAD BAR Y PARRILLA | CANCHA', 'tipo': 'INGRESO', 'icono': 'restaurant', 'activa': 1},
+      {'codigo': 'VENT', 'nombre': 'VENTA NÚMERO EN CANCHA | CANCHA', 'tipo': 'INGRESO', 'icono': 'sports_soccer', 'activa': 1},
+      {'codigo': 'TRIB', 'nombre': 'TRIBUNA | CANCHA', 'tipo': 'INGRESO', 'icono': 'stadium', 'activa': 1},
       {'codigo': 'PUBL', 'nombre': 'REC.PUBLICIDAD ESTÁTICA Y GASTO', 'tipo': 'INGRESO', 'icono': 'campaign', 'activa': 1},
       {'codigo': 'COLA', 'nombre': 'COLABORADORES PAGO DT Y JUG', 'tipo': 'INGRESO', 'icono': 'volunteer_activism', 'activa': 1},
-      {'codigo': 'PEIN', 'nombre': 'PEÑAS E INGRESOS VARIOS', 'tipo': 'INGRESO', 'icono': 'groups', 'activa': 1},
+      {'codigo': 'PEIN', 'nombre': 'PEÑAS E INGRESOS VARIOS', 'tipo': 'AMBOS', 'icono': 'groups', 'activa': 1},
       {'codigo': 'COVE', 'nombre': 'COMISIONES VENTA RIFAS ETC.', 'tipo': 'INGRESO', 'icono': 'local_activity', 'activa': 1},
-      {'codigo': 'INTE', 'nombre': 'INTERESES y GASTOS Cuenta', 'tipo': 'INGRESO', 'icono': 'account_balance', 'activa': 1},
       {'codigo': 'LIGA', 'nombre': 'LIGA - FICHAJES Y MULTAS', 'tipo': 'INGRESO', 'icono': 'gavel', 'activa': 1},
       {'codigo': 'COBR', 'nombre': 'COBROS Y PAGOS PASE JUGADOR', 'tipo': 'INGRESO', 'icono': 'swap_horiz', 'activa': 1},
       
       // EGRESOS
-      {'codigo': 'SARB', 'nombre': 'SERVICIO DE ÁRBITROS', 'tipo': 'EGRESO', 'icono': 'sports', 'activa': 1},
-      {'codigo': 'SPOL', 'nombre': 'SERVICIO POLICIA ADICIONAL', 'tipo': 'EGRESO', 'icono': 'local_police', 'activa': 1},
-      {'codigo': 'FUMA', 'nombre': 'FUMIGACION', 'tipo': 'EGRESO', 'icono': 'pest_control', 'activa': 1},
-      {'codigo': 'PAJU', 'nombre': 'PAGO JUGADORES', 'tipo': 'EGRESO', 'icono': 'people', 'activa': 1},
+      {'codigo': 'SARB', 'nombre': 'SERVICIO DE ÁRBITROS | CANCHA', 'tipo': 'EGRESO', 'icono': 'sports', 'activa': 1},
+      {'codigo': 'SPOL', 'nombre': 'SERVICIO POLICIA ADICIONAL | CANCHA', 'tipo': 'EGRESO', 'icono': 'local_police', 'activa': 1},
+      {'codigo': 'FUMA', 'nombre': 'FILMACION | CANCHA', 'tipo': 'EGRESO', 'icono': 'pest_control', 'activa': 1},
+      {'codigo': 'SREF', 'nombre': 'SUELDO REFUERZOS', 'tipo': 'EGRESO', 'icono': 'people', 'activa': 1},
       {'codigo': 'MOAP', 'nombre': 'MOVILIDAD-APORTES Y GASTOS', 'tipo': 'EGRESO', 'icono': 'directions_bus', 'activa': 1},
       {'codigo': 'SGIN', 'nombre': 'SERVICIO GIMNASIO', 'tipo': 'EGRESO', 'icono': 'fitness_center', 'activa': 1},
-      {'codigo': 'SPFT', 'nombre': 'SERVICIOS P.F. Y TÉCNICO', 'tipo': 'EGRESO', 'icono': 'medical_services', 'activa': 1},
-      {'codigo': 'PALO', 'nombre': 'PAGO JUGADORES LOCALES', 'tipo': 'EGRESO', 'icono': 'home', 'activa': 1},
+      {'codigo': 'SCT', 'nombre': 'SUELDO DT Y CT', 'tipo': 'EGRESO', 'icono': 'medical_services', 'activa': 1},
+      {'codigo': 'SJGL', 'nombre': 'SUELDO JUGADORES LOCALES', 'tipo': 'EGRESO', 'icono': 'home', 'activa': 1},
       {'codigo': 'GAAJ', 'nombre': 'GASTOS ATENCIÓN JUGADORES', 'tipo': 'EGRESO', 'icono': 'restaurant_menu', 'activa': 1},
-      {'codigo': 'GAMF', 'nombre': 'GASTOS MÉDICOS Y FARMACIA', 'tipo': 'EGRESO', 'icono': 'local_pharmacy', 'activa': 1},
+      {'codigo': 'GAMF', 'nombre': 'GASTOS MÉDICOS Y FARMACIA | REINT SEG', 'tipo': 'AMBOS', 'icono': 'local_pharmacy', 'activa': 1},
       {'codigo': 'LAAR', 'nombre': 'LAVADO y ARREGLOS INDUMENT.', 'tipo': 'EGRESO', 'icono': 'local_laundry_service', 'activa': 1},
-      {'codigo': 'SEGU', 'nombre': 'SEGURO', 'tipo': 'EGRESO', 'icono': 'shield', 'activa': 1},
+      {'codigo': 'SEGU', 'nombre': 'SEGURO JUGADORES Y CANCHA', 'tipo': 'EGRESO', 'icono': 'shield', 'activa': 1},
       {'codigo': 'PUPV', 'nombre': 'PUBLICIDAD - PAGOS VARIOS', 'tipo': 'EGRESO', 'icono': 'attach_money', 'activa': 1},
       {'codigo': 'GAS', 'nombre': 'GAS', 'tipo': 'EGRESO', 'icono': 'local_fire_department', 'activa': 1},
       {'codigo': 'ENEL', 'nombre': 'ENERGIA ELECTRICA', 'tipo': 'EGRESO', 'icono': 'bolt', 'activa': 1},
-      {'codigo': 'PEQD', 'nombre': 'PELOTAS-EQUIPO DEPOR.', 'tipo': 'EGRESO', 'icono': 'sports_basketball', 'activa': 1},
+      {'codigo': 'PEQD', 'nombre': 'PELOTAS-EQUIPO DEPOR.', 'tipo': 'AMBOS', 'icono': 'sports_basketball', 'activa': 1},
       {'codigo': 'FERR', 'nombre': 'FERRETERIA', 'tipo': 'EGRESO', 'icono': 'hardware', 'activa': 1},
-      {'codigo': 'MACI', 'nombre': 'MANT.CANCHA Y INSTALACIONES', 'tipo': 'EGRESO', 'icono': 'build', 'activa': 1},
+      {'codigo': 'MACI', 'nombre': 'MANT.CANCHA E INSTALACIONES', 'tipo': 'EGRESO', 'icono': 'build', 'activa': 1},
       {'codigo': 'SEGE', 'nombre': 'SERVICIOS GENERALES / M.de Obra', 'tipo': 'EGRESO', 'icono': 'construction', 'activa': 1},
       {'codigo': 'LISE', 'nombre': 'LIMPIEZA - Servicios', 'tipo': 'EGRESO', 'icono': 'cleaning_services', 'activa': 1},
-      {'codigo': 'OBRA', 'nombre': 'OBRAS', 'tipo': 'EGRESO', 'icono': 'engineering', 'activa': 1},
       {'codigo': 'BIUS', 'nombre': 'BIENES DE USO', 'tipo': 'EGRESO', 'icono': 'inventory_2', 'activa': 1},
-      {'codigo': 'CEIG', 'nombre': 'CERCO-INGRESOS Y GASTOS', 'tipo': 'AMBOS', 'icono': 'fence', 'activa': 1},
-      {'codigo': 'COMB', 'nombre': 'COMBUSTIBLE Y VIÁTICOS', 'tipo': 'INGRESO', 'icono': 'local_gas_station', 'activa': 1},
+      {'codigo': 'CEIG', 'nombre': 'CEREAL-INGRESOS Y GASTOS', 'tipo': 'AMBOS', 'icono': 'fence', 'activa': 1},
       
       // Gestión de fondos
       {'codigo': 'TRANSFERENCIA', 'nombre': 'Transferencia entre cuentas', 'tipo': 'AMBOS', 'icono': 'swap_horiz', 'activa': 1},
       {'codigo': 'COM_BANC', 'nombre': 'Comisión bancaria', 'tipo': 'EGRESO', 'icono': 'account_balance', 'activa': 1},
       {'codigo': 'INT_PF', 'nombre': 'Interés plazo fijo', 'tipo': 'INGRESO', 'icono': 'trending_up', 'activa': 1},
-      {'codigo': 'INDU', 'nombre': 'INDUMENTARIA', 'tipo': 'EGRESO', 'icono': 'checkroom', 'activa': 1},
-      {'codigo': 'SEMA', 'nombre': 'SERVICIO MEDICO Y AMBULANCIA', 'tipo': 'EGRESO', 'icono': 'ambulance', 'activa': 1},
-      {'codigo': 'GARE', 'nombre': 'GASTOS ATENCIÓN REFUERZOS', 'tipo': 'EGRESO', 'icono': 'dinner_dining', 'activa': 1},
-      {'codigo': 'INGE', 'nombre': 'INGRESOS Y GASTOS SOCIOS', 'tipo': 'AMBOS', 'icono': 'card_membership', 'activa': 1},
+      {'codigo': 'INDU', 'nombre': 'INDUMENTARIA', 'tipo': 'AMBOS', 'icono': 'checkroom', 'activa': 1},
+      {'codigo': 'SEMA', 'nombre': 'SERVICIO MEDICO Y AMBULANCIA | CANCHA', 'tipo': 'EGRESO', 'icono': 'ambulance', 'activa': 1},
+      {'codigo': 'GARE', 'nombre': 'GASTOS ATENCIÓN REFUERZOS | DT', 'tipo': 'EGRESO', 'icono': 'dinner_dining', 'activa': 1},
+      {'codigo': 'INGE', 'nombre': 'INGRESOS Y GASTOS SUBCOM', 'tipo': 'AMBOS', 'icono': 'card_membership', 'activa': 1},
       {'codigo': 'BINC', 'nombre': 'BINGO CLUB', 'tipo': 'AMBOS', 'icono': 'casino', 'activa': 1},
       {'codigo': 'DSAL', 'nombre': 'DIFERENCIA SALDO', 'tipo': 'AMBOS', 'icono': 'account_balance_wallet', 'activa': 1},
       {'codigo': 'ADHE', 'nombre': 'ADHESIONES', 'tipo': 'INGRESO', 'icono': 'handshake', 'activa': 1},
@@ -2130,6 +2245,27 @@ class AppDatabase {
       {'nombre': 'Infraestructura',    'requiere_unidad': 0, 'unidad_default': 'ARS', 'orden': 2},
       {'nombre': 'Publicidad/Sponsor', 'requiere_unidad': 0, 'unidad_default': 'ARS', 'orden': 3},
       {'nombre': 'Colaboracion',       'requiere_unidad': 0, 'unidad_default': 'ARS', 'orden': 4},
+    ];
+    for (final s in subcats) {
+      await db.insert('subcategorias', {
+        ...s,
+        'categoria_id': categoriaId,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
+  }
+
+  static Future<void> _seedSubcategoriasMovilidad(Database db) async {
+    final rows = await db.query(
+      'categoria_movimiento',
+      columns: ['id'],
+      where: 'codigo = ?',
+      whereArgs: ['MOAP'],
+    );
+    if (rows.isEmpty) return;
+    final categoriaId = rows.first['id'] as int;
+    const subcats = [
+      {'nombre': 'Viático (Dinero)', 'requiere_unidad': 0, 'unidad_default': 'ARS', 'orden': 1},
+      {'nombre': 'Combustible',       'requiere_unidad': 1, 'unidad_default': 'ARS', 'orden': 2},
     ];
     for (final s in subcats) {
       await db.insert('subcategorias', {

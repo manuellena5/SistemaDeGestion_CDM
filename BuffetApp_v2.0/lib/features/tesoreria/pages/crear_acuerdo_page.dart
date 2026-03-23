@@ -279,9 +279,12 @@ class _CrearAcuerdoPageState extends State<CrearAcuerdoPage> {
         montoSuplente: _esPorEvento ? double.tryParse(_montoSuplenteController.text) : null,
         montoNoJugo: _esPorEvento ? (double.tryParse(_montoNoJugoController.text) ?? 0) : 0,
         partidosEsperadosMes: _esPorEvento ? (int.tryParse(_partidosEsperadosController.text) ?? 4) : 4,
+        // La page genera los compromisos explícitamente abajo para capturar el conteo.
+        // Si se dejara en true (default), generarCompromisos se llamaría dos veces.
+        generaCompromisos: false,
       );
 
-      // Generar compromisos automáticamente
+      // Generar compromisos (única vez, gestionado aquí para capturar el conteo)
       final cuotasGeneradas =
           await AcuerdosService.generarCompromisos(acuerdoId);
       final cuotasDetalle =
@@ -409,7 +412,9 @@ class _CrearAcuerdoPageState extends State<CrearAcuerdoPage> {
                                         ),
                                       ),
                                       Text(
-                                        Format.moneyNoDecimals(monto),
+                                        _unidadAcuerdo == 'LTS'
+                                            ? '${monto.toStringAsFixed(0)} lts'
+                                            : Format.moneyNoDecimals(monto),
                                         style: const TextStyle(
                                           fontSize: 13,
                                           fontWeight: FontWeight.w500,
@@ -866,11 +871,12 @@ class _CrearAcuerdoPageState extends State<CrearAcuerdoPage> {
         if (_modalidad == 'MONTO_TOTAL_CUOTAS' && !_esPorEvento) ...[
           TextFormField(
             controller: _montoTotalController,
-            decoration: const InputDecoration(
-              labelText: 'Monto Total *',
-              prefixText: '\$ ',
-              border: OutlineInputBorder(),
-              hintText: '100000',
+            decoration: InputDecoration(
+              labelText: _unidadAcuerdo == 'LTS' ? 'Litros Total *' : 'Monto Total *',
+              prefixText: _unidadAcuerdo == 'LTS' ? null : '\$ ',
+              suffixText: _unidadAcuerdo == 'LTS' ? 'lts' : null,
+              border: const OutlineInputBorder(),
+              hintText: _unidadAcuerdo == 'LTS' ? '100' : '100000',
             ),
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             inputFormatters: [
@@ -906,11 +912,12 @@ class _CrearAcuerdoPageState extends State<CrearAcuerdoPage> {
         if (_modalidad == 'RECURRENTE' && !_esPorEvento) ...[
           TextFormField(
             controller: _montoPeriodicoController,
-            decoration: const InputDecoration(
-              labelText: 'Monto por Período *',
-              prefixText: '\$ ',
-              border: OutlineInputBorder(),
-              hintText: '50000',
+            decoration: InputDecoration(
+              labelText: _unidadAcuerdo == 'LTS' ? 'Litros por Período *' : 'Monto por Período *',
+              prefixText: _unidadAcuerdo == 'LTS' ? null : '\$ ',
+              suffixText: _unidadAcuerdo == 'LTS' ? 'lts' : null,
+              border: const OutlineInputBorder(),
+              hintText: _unidadAcuerdo == 'LTS' ? '20' : '50000',
             ),
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             inputFormatters: [

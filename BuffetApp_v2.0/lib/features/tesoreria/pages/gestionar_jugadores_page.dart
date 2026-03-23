@@ -310,6 +310,7 @@ class _GestionarJugadoresPageState extends State<GestionarJugadoresPage> {
             DataColumn(label: Text('Detalle', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(label: Text('Nombre', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(label: Text('Rol', style: TextStyle(fontWeight: FontWeight.bold))),
+            DataColumn(label: Text('Edad', style: TextStyle(fontWeight: FontWeight.bold)), numeric: true),
             DataColumn(label: Text('Posición', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(label: Text('Tipo Contratación', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(label: Text('Estado', style: TextStyle(fontWeight: FontWeight.bold))),
@@ -322,6 +323,20 @@ class _GestionarJugadoresPageState extends State<GestionarJugadoresPage> {
             final activo = (entidad['estado_activo'] as int) == 1;
             final posicion = entidad['posicion'] as String? ?? '-';
             final tipoContratacion = entidad['tipo_contratacion'] as String? ?? '-';
+            final fechaNacStr = entidad['fecha_nacimiento'] as String?;
+            String edadStr = '-';
+            if (fechaNacStr != null && fechaNacStr.isNotEmpty) {
+              try {
+                final nacimiento = DateTime.parse(fechaNacStr);
+                final hoy = DateTime.now();
+                int edad = hoy.year - nacimiento.year;
+                if (hoy.month < nacimiento.month ||
+                    (hoy.month == nacimiento.month && hoy.day < nacimiento.day)) {
+                  edad--;
+                }
+                edadStr = '$edad';
+              } catch (_) {}
+            }
 
             return DataRow(
               selected: _jugadoresSeleccionados.contains(id),
@@ -359,6 +374,7 @@ class _GestionarJugadoresPageState extends State<GestionarJugadoresPage> {
                   ),
                 )),
                 DataCell(Text(_nombreRol(rol))),
+                DataCell(Text(edadStr)),
                 DataCell(Text(posicion)),
                 DataCell(Text(tipoContratacion)),
                 DataCell(

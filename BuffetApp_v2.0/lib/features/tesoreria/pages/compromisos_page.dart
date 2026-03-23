@@ -34,17 +34,18 @@ class _CompromisosPageState extends State<CompromisosPage>
   bool _isLoading = true;
   List<Map<String, dynamic>> _entidades = []; // Para dropdown de entidades
 
-  // FASE 22.5: Filtros visibles (no modal)
+  // Filtros
   int? _unidadGestionId;
-  int? _entidadPlantelId; // Filtro por jugador/DT
-  String? _rolFiltro; // 'DT', 'JUGADOR', 'OTRO', null = todos
+  int? _entidadPlantelId;
   String? _tipoFiltro; // 'INGRESO', 'EGRESO', null = todos
-  bool?
-      _origenAcuerdoFiltro; // true = solo acuerdos, false = solo manuales, null = todos
+  bool? _origenAcuerdoFiltro; // true = solo acuerdos, false = solo manuales, null = todos
   bool? _activoFiltro; // true = activos, false = pausados, null = todos
+  String _nombreFiltro = '';
+  late final TextEditingController _searchController;
 
-  // Vista
-  bool _vistaTabla = true; // false = tarjetas, true = tabla (por defecto)
+  // Ordenamiento de la tabla
+  String? _sortColumn;
+  bool _sortAsc = true;
 
   // Selector de mes para la vista lista
   DateTime _mesActualLista = DateTime(DateTime.now().year, DateTime.now().month);
@@ -57,6 +58,7 @@ class _CompromisosPageState extends State<CompromisosPage>
   @override
   void initState() {
     super.initState();
+    _searchController = TextEditingController();
     _tabController = TabController(length: 3, vsync: this);
     _cargarEntidades();
     _cargarCompromisos();
@@ -64,6 +66,7 @@ class _CompromisosPageState extends State<CompromisosPage>
 
   @override
   void dispose() {
+    _searchController.dispose();
     _tabController.dispose();
     super.dispose();
   }
@@ -71,10 +74,12 @@ class _CompromisosPageState extends State<CompromisosPage>
   Future<void> _cargarEntidades() async {
     try {
       final db = await AppDatabase.instance();
-      final entidades = await db.query(
-        'entidades_plantel',
-        where: 'eliminado = 0',
-        orderBy: 'nombre ASC',
+      // Solo entidades que tienen al menos un compromiso
+      final entidades = await db.rawQuery(
+        'SELECT DISTINCT ep.id, ep.nombre FROM entidades_plantel ep '
+        'INNER JOIN compromisos c ON c.entidad_plantel_id = ep.id '
+        'WHERE ep.eliminado = 0 AND c.eliminado = 0 '
+        'ORDER BY ep.nombre ASC',
       );
 
       if (mounted) {
@@ -117,11 +122,6 @@ class _CompromisosPageState extends State<CompromisosPage>
       if (_entidadPlantelId != null) {
         whereConditions.add('entidad_plantel_id = ?');
         whereArgs.add(_entidadPlantelId);
-      }
-
-      if (_rolFiltro != null) {
-        whereConditions.add('entidad_rol = ?');
-        whereArgs.add(_rolFiltro);
       }
 
       final whereClause =
@@ -185,10 +185,11 @@ class _CompromisosPageState extends State<CompromisosPage>
     setState(() {
       _unidadGestionId = null;
       _entidadPlantelId = null;
-      _rolFiltro = null;
       _tipoFiltro = null;
       _origenAcuerdoFiltro = null;
       _activoFiltro = null;
+      _nombreFiltro = '';
+      _searchController.clear();
     });
     _cargarCompromisos();
   }
@@ -227,15 +228,6 @@ class _CompromisosPageState extends State<CompromisosPage>
       title: 'Acuerdos y Compromisos',
       currentRoute: '/compromisos',
       actions: [
-        // Toggle vista tabla/tarjetas (solo en pestaña lista)
-        if (_tabController.index == 0)
-          IconButton(
-            icon: Icon(_vistaTabla ? Icons.view_list : Icons.table_chart),
-            onPressed: () {
-              setState(() => _vistaTabla = !_vistaTabla);
-            },
-            tooltip: _vistaTabla ? 'Vista de tarjetas' : 'Vista de tabla',
-          ),
         // Botón de ayuda
         IconButton(
           icon: const Icon(Icons.help_outline),
@@ -293,15 +285,7 @@ class _CompromisosPageState extends State<CompromisosPage>
                                 )
                               : RefreshIndicator(
                                   onRefresh: _cargarCompromisos,
-                                  child: _vistaTabla
-                                      ? _buildTabla()
-                                      : Align(
-                                          alignment: Alignment.topCenter,
-                                          child: ConstrainedBox(
-                                            constraints: const BoxConstraints(maxWidth: 1000),
-                                            child: _buildTarjetas(),
-                                          ),
-                                        ),
+                                  child: _buildTabla(),
                                 ),
                     ),
                   ],
@@ -365,17 +349,45 @@ class _CompromisosPageState extends State<CompromisosPage>
     final mesInicioStr = DateFormat('yyyy-MM-dd').format(mesInicio);
     final mesFinStr = DateFormat('yyyy-MM-dd').format(mesFin);
 
-    return _compromisos.where((c) {
+    var filtrados = _compromisos.where((c) {
       final inicio = c['fecha_inicio'] as String? ?? '';
       final fin = c['fecha_fin'] as String?;
-      // Si no hay fecha de inicio, incluir siempre
       if (inicio.isEmpty) return true;
-      // Compromiso empieza después del mes → no incluir
       if (inicio.compareTo(mesFinStr) > 0) return false;
-      // Si tiene fecha_fin y terminó antes del mes → no incluir
       if (fin != null && fin.isNotEmpty && fin.compareTo(mesInicioStr) < 0) return false;
       return true;
     }).toList();
+
+    // Filtro por nombre (en-memoria)
+    if (_nombreFiltro.isNotEmpty) {
+      final query = _nombreFiltro.toLowerCase();
+      filtrados = filtrados.where((c) {
+        final nombre = (c['nombre'] as String? ?? '').toLowerCase();
+        return nombre.contains(query);
+      }).toList();
+    }
+
+    if (_sortColumn != null) {
+      filtrados.sort((a, b) {
+        dynamic va = a[_sortColumn!];
+        dynamic vb = b[_sortColumn!];
+        int cmp;
+        if (va == null && vb == null) {
+          cmp = 0;
+        } else if (va == null) {
+          cmp = -1;
+        } else if (vb == null) {
+          cmp = 1;
+        } else if (va is num && vb is num) {
+          cmp = va.compareTo(vb);
+        } else {
+          cmp = va.toString().toLowerCase().compareTo(vb.toString().toLowerCase());
+        }
+        return _sortAsc ? cmp : -cmp;
+      });
+    }
+
+    return filtrados;
   }
 
   /// FASE 22.5: Sección de filtros visibles (dropdowns en lugar de modal)
@@ -389,67 +401,70 @@ class _CompromisosPageState extends State<CompromisosPage>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Fila de dropdowns
+            // Búsqueda por nombre + filtros
+            Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: InputDecoration(
+                      hintText: 'Buscar por nombre...',
+                      prefixIcon: const Icon(Icons.search, size: 18),
+                      border: const OutlineInputBorder(),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
+                      isDense: true,
+                      filled: true,
+                      fillColor: colors.bgSurface,
+                    ),
+                    onChanged: (val) {
+                      setState(() => _nombreFiltro = val.trim());
+                    },
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // Entidad
+                if (_entidades.isNotEmpty)
+                  SizedBox(
+                    width: 200,
+                    key: ValueKey('entidad_$_entidadPlantelId'),
+                    child: DropdownButtonFormField<int?>(
+                      initialValue: _entidadPlantelId,
+                      decoration: InputDecoration(
+                        labelText: 'Entidad',
+                        border: const OutlineInputBorder(),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        filled: true,
+                        fillColor: colors.bgSurface,
+                      ),
+                      items: [
+                        const DropdownMenuItem<int?>(
+                            value: null, child: Text('Todos')),
+                        ..._entidades.map((e) => DropdownMenuItem<int?>(
+                              value: e['id'] as int,
+                              child: Text(e['nombre'] as String),
+                            )),
+                      ],
+                      onChanged: (val) {
+                        setState(() => _entidadPlantelId = val);
+                        _cargarCompromisos();
+                      },
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            // Segunda fila de dropdowns
             Wrap(
               spacing: 12,
               runSpacing: 12,
               children: [
-                // Entidad
-                SizedBox(
-                  width: 200,
-                  child: DropdownButtonFormField<int?>(
-                    initialValue: _entidadPlantelId,
-                    decoration: InputDecoration(
-                      labelText: 'Entidad',
-                      border: const OutlineInputBorder(),
-                      contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      filled: true,
-                      fillColor: colors.bgSurface,
-                    ),
-                    items: [
-                      const DropdownMenuItem<int?>(
-                          value: null, child: Text('Todos')),
-                      ..._entidades.map((e) => DropdownMenuItem<int?>(
-                            value: e['id'] as int,
-                            child: Text(e['nombre'] as String),
-                          )),
-                    ],
-                    onChanged: (val) {
-                      setState(() => _entidadPlantelId = val);
-                    },
-                  ),
-                ),
-
-                // Rol
-                SizedBox(
-                  width: 150,
-                  child: DropdownButtonFormField<String?>(
-                    initialValue: _rolFiltro,
-                    decoration: InputDecoration(
-                      labelText: 'Rol',
-                      border: const OutlineInputBorder(),
-                      contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      filled: true,
-                      fillColor: colors.bgSurface,
-                    ),
-                    items: const [
-                      DropdownMenuItem(value: null, child: Text('Todos')),
-                      DropdownMenuItem(value: 'DT', child: Text('DT')),
-                      DropdownMenuItem(
-                          value: 'JUGADOR', child: Text('Jugador')),
-                      DropdownMenuItem(value: 'OTRO', child: Text('Otro')),
-                    ],
-                    onChanged: (val) {
-                      setState(() => _rolFiltro = val);
-                    },
-                  ),
-                ),
-
                 // Tipo
                 SizedBox(
                   width: 150,
+                  key: ValueKey('tipo_$_tipoFiltro'),
                   child: DropdownButtonFormField<String?>(
                     initialValue: _tipoFiltro,
                     decoration: InputDecoration(
@@ -475,6 +490,7 @@ class _CompromisosPageState extends State<CompromisosPage>
                 // Estado (activo/pausado)
                 SizedBox(
                   width: 150,
+                  key: ValueKey('activo_$_activoFiltro'),
                   child: DropdownButtonFormField<bool?>(
                     initialValue: _activoFiltro,
                     decoration: InputDecoration(
@@ -499,6 +515,7 @@ class _CompromisosPageState extends State<CompromisosPage>
                 // Origen acuerdo
                 SizedBox(
                   width: 180,
+                  key: ValueKey('origen_$_origenAcuerdoFiltro'),
                   child: DropdownButtonFormField<bool?>(
                     initialValue: _origenAcuerdoFiltro,
                     decoration: InputDecoration(
@@ -581,15 +598,15 @@ class _CompromisosPageState extends State<CompromisosPage>
                 ),
                 child: Row(
                   children: [
-                    _tableHeader('NOMBRE', flex: 3),
-                    _tableHeader('TIPO', flex: 1),
-                    _tableHeader('ENTIDAD', flex: 2),
-                    _tableHeader('MONTO', flex: 2),
-                    _tableHeader('FRECUENCIA', flex: 1),
+                    _tableHeader('NOMBRE', flex: 3, sortKey: 'nombre'),
+                    _tableHeader('TIPO', flex: 1, sortKey: 'tipo'),
+                    _tableHeader('ENTIDAD', flex: 2, sortKey: 'entidad_nombre'),
+                    _tableHeader('MONTO', flex: 2, sortKey: 'monto'),
+                    _tableHeader('FRECUENCIA', flex: 1, sortKey: 'frecuencia'),
                     _tableHeader('PRÓX. VTO', flex: 2),
-                    _tableHeader('CUOTAS', flex: 1),
+                    _tableHeader('CUOTAS', flex: 1, sortKey: 'cuotas'),
                     _tableHeader('ORIGEN', flex: 1),
-                    _tableHeader('ESTADO', flex: 1),
+                    _tableHeader('ESTADO', flex: 1, sortKey: 'activo'),
                     _tableHeader('', flex: 2), // acciones
                   ],
                 ),
@@ -624,10 +641,40 @@ class _CompromisosPageState extends State<CompromisosPage>
     );
   }
 
-  Widget _tableHeader(String label, {int flex = 1}) {
+  Widget _tableHeader(String label, {int flex = 1, String? sortKey}) {
+    final isActive = sortKey != null && _sortColumn == sortKey;
     return Expanded(
       flex: flex,
-      child: Text(label, style: AppText.label),
+      child: sortKey == null
+          ? Text(label, style: AppText.label)
+          : GestureDetector(
+              onTap: () {
+                setState(() {
+                  if (_sortColumn == sortKey) {
+                    _sortAsc = !_sortAsc;
+                  } else {
+                    _sortColumn = sortKey;
+                    _sortAsc = true;
+                  }
+                });
+              },
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(label, style: AppText.label),
+                  const SizedBox(width: 4),
+                  Icon(
+                    isActive
+                        ? (_sortAsc ? Icons.arrow_upward : Icons.arrow_downward)
+                        : Icons.unfold_more,
+                    size: 14,
+                    color: isActive
+                        ? Theme.of(context).colorScheme.primary
+                        : Theme.of(context).colorScheme.outline,
+                  ),
+                ],
+              ),
+            ),
     );
   }
 
@@ -808,200 +855,6 @@ class _CompromisosPageState extends State<CompromisosPage>
     );
   }
 
-  Widget _buildTarjetas() {
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: _compromisosMesFiltrado.length,
-      itemBuilder: (context, index) {
-        final c = _compromisosMesFiltrado[index];
-        return _buildTarjeta(c);
-      },
-    );
-  }
-
-  Widget _buildTarjeta(Map<String, dynamic> c) {
-    final activo = c['activo'] == 1;
-    final tipo = c['tipo'] as String;
-    final cuotas = c['cuotas'];
-    final cuotasConfirmadas = c['cuotas_confirmadas'] ?? 0;
-    final esDeAcuerdo = c['es_de_acuerdo'] == true;
-    final esIngreso = tipo == 'INGRESO';
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: AppSpacing.md),
-      decoration: AppDecorations.cardOf(context).copyWith(
-        boxShadow: AppShadows.cardFor(context),
-      ),
-      child: InkWell(
-        onTap: () => _verDetalle(c['id'] as int),
-        borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
-        child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.lg),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header: nombre, tipo y estado
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(c['nombre'] ?? '', style: AppText.titleSm),
-                  ),
-                  _buildTipoBadge(tipo),
-                  const SizedBox(width: 8),
-                  _buildEstadoBadge(activo),
-                ],
-              ),
-
-              // Indicador de origen
-              if (esDeAcuerdo) ...[
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Icon(Icons.handshake,
-                        size: 16, color: AppColors.accentLight),
-                    const SizedBox(width: 4),
-                    Text(
-                      'Generado desde Acuerdo',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: AppColors.accentLight,
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-
-              const SizedBox(height: 12),
-
-              // Monto y frecuencia
-              Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Monto', style: AppText.caption),
-                        Text(
-                          Format.money(c['monto'] ?? 0),
-                          style: AppText.monoBold,
-                        ),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Frecuencia', style: AppText.caption),
-                        Text(c['frecuencia'] ?? '', style: AppText.bodyMd),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-
-              // Próximo vencimiento
-              _buildProximoVencimiento(c['id'] as int),
-
-              if (cuotas != null) ...[
-                const SizedBox(height: 12),
-                // Barra de progreso de cuotas
-                LinearProgressIndicator(
-                  value: cuotasConfirmadas / cuotas,
-                  backgroundColor: AppColors.border,
-                  color: esIngreso ? AppColors.ingreso : AppColors.info,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '$cuotasConfirmadas de $cuotas cuotas confirmadas',
-                  style: AppText.caption,
-                ),
-                const SizedBox(height: 8),
-                // Estado financiero (pagado/remanente)
-                _buildEstadoFinanciero(c['id'] as int),
-              ],
-
-              const SizedBox(height: 12),
-
-              // Acciones
-              Row(
-                children: [
-                  // Botón registrar cobro/pago
-                  if (activo)
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: () => _registrarMovimiento(c),
-                        icon: Icon(
-                          esIngreso ? Icons.arrow_downward : Icons.arrow_upward,
-                          size: 18,
-                        ),
-                        label: Text(esIngreso ? 'Cobrar' : 'Pagar'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: esIngreso ? AppColors.ingreso : AppColors.egreso,
-                          foregroundColor: AppColors.textPrimary,
-                        ),
-                      ),
-                    ),
-                  if (activo) const SizedBox(width: 8),
-                  TextButton.icon(
-                    onPressed: () => _pausarReactivar(c['id'] as int, activo),
-                    icon: Icon(activo ? Icons.pause : Icons.play_arrow, size: 18),
-                    label: Text(activo ? 'Pausar' : 'Reactivar'),
-                  ),
-                  const Spacer(),
-                  IconButton(
-                    onPressed: () => _verDetalle(c['id'] as int),
-                    icon: const Icon(Icons.chevron_right),
-                    tooltip: 'Ver detalle',
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTipoBadge(String tipo) {
-    final esIngreso = tipo == 'INGRESO';
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: esIngreso ? AppColors.ingresoDim : AppColors.egresoDim,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Text(
-        tipo,
-        style: TextStyle(
-          color: esIngreso ? AppColors.ingreso : AppColors.egreso,
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildEstadoBadge(bool activo) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: activo ? AppColors.infoDim : AppColors.bgElevated,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Text(
-        activo ? 'ACTIVO' : 'PAUSADO',
-        style: TextStyle(
-          color: activo ? AppColors.info : AppColors.textSecondary,
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
-  }
-
   Widget _buildProximoVencimiento(int compromisoId) {
     return FutureBuilder<DateTime?>(
       future: _compromisosService.calcularProximoVencimiento(compromisoId),
@@ -1043,104 +896,32 @@ class _CompromisosPageState extends State<CompromisosPage>
     );
   }
 
-  Widget _buildEstadoFinanciero(int compromisoId) {
-    return FutureBuilder<Map<String, double>>(
-      future: _calcularEstadoFinanciero(compromisoId),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const SizedBox(
-            height: 16,
-            width: 16,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          );
-        }
-
-        final pagado = snapshot.data!['pagado'] ?? 0.0;
-        final remanente = snapshot.data!['remanente'] ?? 0.0;
-
-        return Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: AppColors.infoDim,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: AppColors.info),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Pagado',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: AppColors.textMuted,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      Format.money(pagado),
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.ingreso,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                width: 1,
-                height: 32,
-                color: AppColors.border,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Remanente',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: AppColors.textMuted,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      Format.money(remanente),
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.advertencia,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Future<Map<String, double>> _calcularEstadoFinanciero(
-      int compromisoId) async {
-    final pagado = await _compromisosService.calcularMontoPagado(compromisoId);
-    final remanente =
-        await _compromisosService.calcularMontoRemanente(compromisoId);
-    return {'pagado': pagado, 'remanente': remanente};
-  }
-
   Future<void> _registrarMovimiento(Map<String, dynamic> c) async {
     final compromisoId = c['id'] as int;
     final tipo = c['tipo'] as String;
     final monto = (c['monto'] as num?)?.toDouble() ?? 0.0;
     final categoria = c['categoria'] as String? ?? '';
+
+    // Lookup unidad del acuerdo (ARS o LTS) si el compromiso viene de un acuerdo
+    String unidadAcuerdo = 'ARS';
+    final acuerdoId = c['acuerdo_id'];
+    if (acuerdoId != null) {
+      try {
+        final db = await AppDatabase.instance();
+        final acuerdos = await db.query(
+          'acuerdos',
+          columns: ['unidad'],
+          where: 'id = ?',
+          whereArgs: [acuerdoId],
+          limit: 1,
+        );
+        if (acuerdos.isNotEmpty) {
+          unidadAcuerdo = (acuerdos.first['unidad'] as String?) ?? 'ARS';
+        }
+      } catch (_) {
+        // En caso de error, usar ARS por defecto
+      }
+    }
 
     // Calcular próximo vencimiento
     final proximoVenc = await _compromisosService.calcularProximoVencimiento(compromisoId);
@@ -1157,6 +938,7 @@ class _CompromisosPageState extends State<CompromisosPage>
           montoSugerido: monto,
           tipo: tipo,
           categoria: categoria,
+          unidadAcuerdo: unidadAcuerdo,
         ),
       ),
     );

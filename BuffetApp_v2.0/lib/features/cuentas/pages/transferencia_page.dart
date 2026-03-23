@@ -165,6 +165,52 @@ class _TransferenciaPageState extends State<TransferenciaPage> {
         
         montoComisionFinal = resultado['monto'] as double?;
         observacionComision = resultado['observacion'] as String?;
+      } else {
+        // Sin comisión — mostrar modal de confirmación simple
+        final cuentaOrigenPrevia = _cuentas.firstWhere((c) => c.id == _cuentaOrigenId);
+        final medioPago = _metodosPago.firstWhere(
+          (m) => m['id'] == _medioPagoId,
+          orElse: () => {},
+        );
+        final medioPagoNombre = medioPago['nombre'] as String? ?? 'Sin especificar';
+        final observacion = _observacionCtrl.text.trim();
+
+        final confirmar = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            icon: const Icon(Icons.swap_horiz, size: 48, color: AppColors.info),
+            title: const Text('Confirmar Transferencia'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildResultRow('Origen:', cuentaOrigenPrevia.nombre),
+                _buildResultRow('Destino:', cuentaDestino.nombre),
+                _buildResultRow('Medio de pago:', medioPagoNombre),
+                if (observacion.isNotEmpty)
+                  _buildResultRow('Observación:', observacion),
+                const Divider(),
+                _buildResultRow('Monto:', Format.money(monto), isBold: true),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancelar'),
+              ),
+              FilledButton.icon(
+                onPressed: () => Navigator.pop(ctx, true),
+                icon: const Icon(Icons.check),
+                label: const Text('Confirmar'),
+              ),
+            ],
+          ),
+        );
+
+        if (confirmar != true) {
+          setState(() => _guardando = false);
+          return;
+        }
       }
 
       final transferenciaId = await _transferenciaService.crear(
@@ -611,9 +657,9 @@ class _DialogComisionTransferenciaState extends State<_DialogComisionTransferenc
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: AppColors.infoDim,
+                color: AppColors.info.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: AppColors.info),
+                border: Border.all(color: AppColors.info.withValues(alpha: 0.5)),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -672,7 +718,7 @@ class _DialogComisionTransferenciaState extends State<_DialogComisionTransferenc
                   borderRadius: BorderRadius.circular(8),
                 ),
                 filled: true,
-                fillColor: AppColors.bgElevated,
+                fillColor: Theme.of(context).colorScheme.surfaceContainerHighest,
               ),
             ),
             

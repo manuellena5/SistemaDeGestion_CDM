@@ -29,6 +29,10 @@ class CrearMovimientoPage extends StatefulWidget {
   final double? montoInicial;
   final String? descripcionInicial;
   final int? eventoCdmIdInicial;
+  // Parámetros para adhesiones de combustible (unidad LTS)
+  final String unidadAcuerdo;
+  final double? cantidadLitrosInicial;
+  final double? precioLitroInicial;
   
   const CrearMovimientoPage({
     super.key,
@@ -41,6 +45,9 @@ class CrearMovimientoPage extends StatefulWidget {
     this.montoInicial,
     this.descripcionInicial,
     this.eventoCdmIdInicial,
+    this.unidadAcuerdo = 'ARS',
+    this.cantidadLitrosInicial,
+    this.precioLitroInicial,
   });
 
   @override
@@ -51,6 +58,10 @@ class _CrearMovimientoPageState extends State<CrearMovimientoPage> {
   final _formKey = GlobalKey<FormState>();
   final _montoCtrl = TextEditingController();
   final _obsCtrl = TextEditingController();
+  // Campos exclusivos para acuerdos en litros (combustible)
+  final _litrosCtrl = TextEditingController();
+  final _precioLitroCtrl = TextEditingController();
+  double? _montoArsCalculado;
   
   String _tipo = 'INGRESO';
   String? _codigoCategoria;
@@ -85,6 +96,18 @@ class _CrearMovimientoPageState extends State<CrearMovimientoPage> {
     }
     if (widget.montoInicial != null) {
       _montoCtrl.text = widget.montoInicial!.toStringAsFixed(2);
+    }
+    // Pre-cargar campos LTS si corresponde
+    if (widget.unidadAcuerdo == 'LTS') {
+      if (widget.cantidadLitrosInicial != null) {
+        _litrosCtrl.text = widget.cantidadLitrosInicial!.toStringAsFixed(2);
+      }
+      if (widget.precioLitroInicial != null) {
+        _precioLitroCtrl.text = widget.precioLitroInicial!.toStringAsFixed(2);
+      }
+      _litrosCtrl.addListener(_recalcularMontoLts);
+      _precioLitroCtrl.addListener(_recalcularMontoLts);
+      _recalcularMontoLts();
     }
     if (widget.descripcionInicial != null) {
       _obsCtrl.text = widget.descripcionInicial!;
@@ -245,8 +268,38 @@ class _CrearMovimientoPageState extends State<CrearMovimientoPage> {
         archivoSize = savedAttachment['archivo_size'];
       }
       
-      final monto = double.parse(_montoCtrl.text.trim().replaceAll(',', '.'));
-      
+      // Para acuerdos LTS: calcular monto ARS a partir de litros × precio/lt
+      double monto;
+      double? cantidadLitros;
+      double? precioLitroArs;
+      if (widget.unidadAcuerdo == 'LTS') {
+        final litros = double.tryParse(_litrosCtrl.text.trim().replaceAll(',', '.'));
+        final precio = double.tryParse(_precioLitroCtrl.text.trim().replaceAll(',', '.'));
+        if (litros == null || litros <= 0) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Ingresá una cantidad de litros válida')),
+            );
+          }
+          setState(() => _guardando = false);
+          return;
+        }
+        if (precio == null || precio <= 0) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Ingresá un precio por litro válido')),
+            );
+          }
+          setState(() => _guardando = false);
+          return;
+        }
+        cantidadLitros = litros;
+        precioLitroArs = precio;
+        monto = litros * precio;
+      } else {
+        monto = double.parse(_montoCtrl.text.trim().replaceAll(',', '.'));
+      }
+
       if (widget.movimientoExistente != null) {
         // Actualizar movimiento existente
         final movId = widget.movimientoExistente!['id'] as int;
@@ -268,6 +321,15 @@ class _CrearMovimientoPageState extends State<CrearMovimientoPage> {
           entidadPlantelId: _entidadPlantelId,
           eventoCdmId: _eventoCdmId,
         );
+        // Si es LTS, actualizar también la cuota en compromiso_cuotas
+        if (widget.unidadAcuerdo == 'LTS' && cantidadLitros != null && precioLitroArs != null) {
+          final db = await AppDatabase.instance();
+          await db.rawUpdate('''
+            UPDATE compromiso_cuotas
+            SET monto_real = ?, cantidad_litros = ?, precio_litro_ars = ?, updated_ts = ?
+            WHERE movimiento_id = ?
+          ''', [monto, cantidadLitros, precioLitroArs, DateTime.now().millisecondsSinceEpoch, movId]);
+        }
       } else {
         // Crear nuevo movimiento
         await svc.crear(
@@ -450,10 +512,22 @@ class _CrearMovimientoPageState extends State<CrearMovimientoPage> {
     }
   }
 
+  void _recalcularMontoLts() {
+    final litros = double.tryParse(_litrosCtrl.text.replaceAll(',', '.'));
+    final precio = double.tryParse(_precioLitroCtrl.text.replaceAll(',', '.'));
+    setState(() {
+      _montoArsCalculado = (litros != null && precio != null && litros > 0 && precio > 0)
+          ? litros * precio
+          : null;
+    });
+  }
+
   @override
   void dispose() {
     _montoCtrl.dispose();
     _obsCtrl.dispose();
+    _litrosCtrl.dispose();
+    _precioLitroCtrl.dispose();
     super.dispose();
   }
 
@@ -659,23 +733,108 @@ class _CrearMovimientoPageState extends State<CrearMovimientoPage> {
           
           const SizedBox(height: 16),
           
-          // Monto
-          TextFormField(
-            controller: _montoCtrl,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(
-              labelText: 'Monto *',
-              border: OutlineInputBorder(),
-              prefixIcon: Icon(Icons.attach_money),
-              prefixText: '\$ ',
+          // Monto (normal ARS) o campos LTS según tipo de acuerdo
+          if (widget.unidadAcuerdo == 'LTS') ...[
+            // Banner indicador
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.1),
+                border: Border.all(color: Colors.orange.shade300),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.local_gas_station, color: Colors.orange.shade700, size: 20),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Acuerdo por litros de combustible',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
             ),
-            validator: (v) {
-              if (v == null || v.trim().isEmpty) return 'Requerido';
-              final monto = double.tryParse(v.trim().replaceAll(',', '.'));
-              if (monto == null || monto <= 0) return 'Debe ser mayor a 0';
-              return null;
-            },
-          ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: TextFormField(
+                    controller: _litrosCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Litros *',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.water_drop),
+                      suffixText: 'lts',
+                    ),
+                    validator: (v) {
+                      if (v == null || v.trim().isEmpty) return 'Requerido';
+                      final val = double.tryParse(v.trim().replaceAll(',', '.'));
+                      if (val == null || val <= 0) return 'Debe ser mayor a 0';
+                      return null;
+                    },
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextFormField(
+                    controller: _precioLitroCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Precio/lt *',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.attach_money),
+                      prefixText: '\$ ',
+                    ),
+                    validator: (v) {
+                      if (v == null || v.trim().isEmpty) return 'Requerido';
+                      final val = double.tryParse(v.trim().replaceAll(',', '.'));
+                      if (val == null || val <= 0) return 'Debe ser mayor a 0';
+                      return null;
+                    },
+                  ),
+                ),
+              ],
+            ),
+            if (_montoArsCalculado != null) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.green.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.calculate_outlined, color: Colors.green, size: 18),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Total ARS: \$${_montoArsCalculado!.toStringAsFixed(2)}',
+                      style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ] else
+            TextFormField(
+              controller: _montoCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'Monto *',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.attach_money),
+                prefixText: '\$ ',
+              ),
+              validator: (v) {
+                if (v == null || v.trim().isEmpty) return 'Requerido';
+                final monto = double.tryParse(v.trim().replaceAll(',', '.'));
+                if (monto == null || monto <= 0) return 'Debe ser mayor a 0';
+                return null;
+              },
+            ),
           
           const SizedBox(height: 16),
           

@@ -1748,6 +1748,7 @@ class _MovimientosListPageState extends State<MovimientosListPage> {
                 tipo: mov.tipo,
                 categoria: mov.categoria,
                 numeroCuota: mov.numeroCuota,
+                unidadAcuerdo: mov.unidadAcuerdo,
               ),
             ),
           );
@@ -2227,6 +2228,7 @@ class _MovimientosListPageState extends State<MovimientosListPage> {
                                     tipo: mov.tipo,
                                     categoria: mov.categoria,
                                     numeroCuota: mov.numeroCuota,
+                                    unidadAcuerdo: mov.unidadAcuerdo,
                                   ),
                                 ),
                               );
@@ -2292,10 +2294,48 @@ class _MovimientosListPageState extends State<MovimientosListPage> {
   }
 
   Future<void> _editarMovimiento(Map<String, dynamic> mov) async {
+    // Detectar si es una adhesión de combustible (LTS) para mostrar el formulario correcto
+    String unidadAcuerdo = 'ARS';
+    double? cantidadLitros;
+    double? precioLitro;
+    final compromisoId = mov['compromiso_id'] as int?;
+    if (compromisoId != null) {
+      try {
+        final db = await AppDatabase.instance();
+        // Buscar la cuota asociada a este movimiento
+        final cuotas = await db.rawQuery('''
+          SELECT cc.cantidad_litros, cc.precio_litro_ars, a.unidad
+          FROM compromiso_cuotas cc
+          JOIN compromisos c ON cc.compromiso_id = c.id
+          LEFT JOIN acuerdos a ON c.acuerdo_id = a.id
+          WHERE cc.movimiento_id = ?
+          LIMIT 1
+        ''', [mov['id']]);
+        if (cuotas.isNotEmpty) {
+          unidadAcuerdo = (cuotas.first['unidad'] as String? ?? 'ARS');
+          if (unidadAcuerdo == 'LTS') {
+            cantidadLitros = (cuotas.first['cantidad_litros'] as num?)?.toDouble();
+            precioLitro = (cuotas.first['precio_litro_ars'] as num?)?.toDouble();
+          }
+        }
+      } catch (e, st) {
+        await AppDatabase.logLocalError(
+          scope: 'movimientos_list.detectar_unidad',
+          error: e,
+          stackTrace: st,
+        );
+      }
+    }
+
     final result = await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => CrearMovimientoPage(movimientoExistente: mov),
+        builder: (_) => CrearMovimientoPage(
+          movimientoExistente: mov,
+          unidadAcuerdo: unidadAcuerdo,
+          cantidadLitrosInicial: cantidadLitros,
+          precioLitroInicial: precioLitro,
+        ),
       ),
     );
     
@@ -2579,6 +2619,7 @@ class _MovimientosListPageState extends State<MovimientosListPage> {
           tipo: mov.tipo,
           categoria: mov.categoria,
           numeroCuota: mov.numeroCuota,
+          unidadAcuerdo: mov.unidadAcuerdo,
         ),
       ),
     );
@@ -3027,6 +3068,7 @@ class _MovimientosListPageState extends State<MovimientosListPage> {
                       tipo: mov.tipo,
                       categoria: mov.categoria,
                       numeroCuota: mov.numeroCuota,
+                      unidadAcuerdo: mov.unidadAcuerdo,
                     ),
                   ),
                 );

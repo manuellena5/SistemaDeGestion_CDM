@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../layout/erp_layout.dart';
-import '../../../widgets/app_header.dart';
 import '../../../widgets/summary_card.dart';
 import '../../../widgets/status_badge.dart';
 import '../../shared/widgets/empty_state.dart';
@@ -28,24 +27,35 @@ class AcuerdosPage extends StatefulWidget {
 
 class _AcuerdosPageState extends State<AcuerdosPage> {
   List<Map<String, dynamic>> _acuerdos = [];
-  List<Map<String, dynamic>> _unidadesGestion = [];
   List<Map<String, dynamic>> _entidadesPlantel = [];
   bool _isLoading = true;
 
   // Filtros
-  int? _unidadGestionId;
   int? _entidadPlantelId;
   String? _tipoFiltro; // 'INGRESO', 'EGRESO', null = todos
   bool? _activoFiltro; // true = activos, false = finalizados, null = todos
   String? _origenFiltro; // 'MANUAL', 'GRUPAL', null = todos
+  String _nombreFiltro = '';
+  late final TextEditingController _searchController;
 
   // Vista
   bool _vistaTabla = true; // false = tarjetas, true = tabla
 
+  // Ordenamiento de la tabla
+  String? _sortColumn;
+  bool _sortAsc = true;
+
   @override
   void initState() {
     super.initState();
+    _searchController = TextEditingController();
     _cargarDatos();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _cargarDatos() async {
@@ -54,17 +64,20 @@ class _AcuerdosPageState extends State<AcuerdosPage> {
     try {
       final db = await AppDatabase.instance();
 
-      final unidades = await db.query('unidades_gestion',
-          where: 'activo = 1', orderBy: 'nombre');
-      final entidades = await db.query('entidades_plantel',
-          where: 'estado_activo = 1', orderBy: 'nombre');
+      // Solo cargar entidades que tienen al menos un acuerdo activo
+      final entidadesRaw = await db.rawQuery(
+        'SELECT DISTINCT ep.* FROM entidades_plantel ep '
+        'INNER JOIN acuerdos a ON a.entidad_plantel_id = ep.id '
+        'WHERE ep.estado_activo = 1 AND a.eliminado = 0 '
+        'ORDER BY ep.nombre',
+      );
+      final entidades = entidadesRaw.map((e) => Map<String, dynamic>.from(e)).toList();
 
       List<Map<String, dynamic>> acuerdosRaw;
 
       if (_origenFiltro != null) {
         final soloGrupal = _origenFiltro == 'GRUPAL';
         acuerdosRaw = await AcuerdosService.listarAcuerdos(
-          unidadGestionId: _unidadGestionId,
           entidadPlantelId: _entidadPlantelId,
           tipo: _tipoFiltro,
           soloActivos: _activoFiltro,
@@ -75,7 +88,6 @@ class _AcuerdosPageState extends State<AcuerdosPage> {
         }).toList();
       } else {
         acuerdosRaw = await AcuerdosService.listarAcuerdos(
-          unidadGestionId: _unidadGestionId,
           entidadPlantelId: _entidadPlantelId,
           tipo: _tipoFiltro,
           soloActivos: _activoFiltro,
@@ -86,16 +98,7 @@ class _AcuerdosPageState extends State<AcuerdosPage> {
           acuerdosRaw.map((a) => Map<String, dynamic>.from(a)).toList();
 
       for (final acuerdo in acuerdos) {
-        final unidadId = acuerdo['unidad_gestion_id'] as int?;
         final entidadId = acuerdo['entidad_plantel_id'] as int?;
-
-        if (unidadId != null) {
-          final unidad = unidades.firstWhere(
-            (u) => u['id'] == unidadId,
-            orElse: () => {'nombre': 'Desconocida'},
-          );
-          acuerdo['_unidad_nombre'] = unidad['nombre'];
-        }
 
         if (entidadId != null) {
           final entidad = entidades.firstWhere(
@@ -112,7 +115,6 @@ class _AcuerdosPageState extends State<AcuerdosPage> {
 
       setState(() {
         _acuerdos = acuerdos;
-        _unidadesGestion = unidades;
         _entidadesPlantel = entidades;
         _isLoading = false;
       });
@@ -125,7 +127,6 @@ class _AcuerdosPageState extends State<AcuerdosPage> {
 
       setState(() {
         _acuerdos = [];
-        _unidadesGestion = [];
         _entidadesPlantel = [];
         _isLoading = false;
       });
@@ -144,11 +145,12 @@ class _AcuerdosPageState extends State<AcuerdosPage> {
 
   void _limpiarFiltros() {
     setState(() {
-      _unidadGestionId = null;
       _entidadPlantelId = null;
       _tipoFiltro = null;
       _activoFiltro = null;
       _origenFiltro = null;
+      _nombreFiltro = '';
+      _searchController.clear();
     });
     _cargarDatos();
   }
@@ -476,7 +478,7 @@ class _AcuerdosPageState extends State<AcuerdosPage> {
                   const SizedBox(height: AppSpacing.lg),
 
                   // Contenido
-                  _acuerdos.isEmpty
+                  _acuerdosOrdenados.isEmpty
                       ? _buildEmptyState()
                       : _vistaTabla
                           ? _buildStyledTable()
@@ -587,42 +589,46 @@ class _AcuerdosPageState extends State<AcuerdosPage> {
               ],
             ],
           ),
-          // Unidad + Entidad (segunda fila)
-          if (_unidadesGestion.isNotEmpty) ...[
-            const SizedBox(height: AppSpacing.md),
-            Row(
-              children: [
+          // Segunda fila: búsqueda por nombre + entidad
+          const SizedBox(height: AppSpacing.md),
+          Row(
+            children: [
+              // Búsqueda por nombre
+              Expanded(
+                flex: 3,
+                child: TextField(
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    hintText: 'Buscar por nombre...',
+                    prefixIcon: const Icon(Icons.search, size: 18),
+                    border: const OutlineInputBorder(),
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 8),
+                    isDense: true,
+                  ),
+                  onChanged: (val) {
+                    setState(() => _nombreFiltro = val.trim());
+                  },
+                ),
+              ),
+              if (_entidadesPlantel.isNotEmpty) ...[
+                const SizedBox(width: AppSpacing.sm),
                 _buildDropdownFilter<int?>(
-                  value: _unidadGestionId,
-                  hint: 'Unidad de Gestión',
+                  value: _entidadPlantelId,
+                  hint: 'Entidad',
                   items: {
                     null: 'Todas',
-                    for (final u in _unidadesGestion)
-                      u['id'] as int: u['nombre'] as String,
+                    for (final e in _entidadesPlantel)
+                      e['id'] as int: e['nombre'] as String,
                   },
                   onChanged: (v) {
-                    setState(() => _unidadGestionId = v);
+                    setState(() => _entidadPlantelId = v);
                     _cargarDatos();
                   },
                 ),
-                const SizedBox(width: AppSpacing.sm),
-                if (_entidadesPlantel.isNotEmpty)
-                  _buildDropdownFilter<int?>(
-                    value: _entidadPlantelId,
-                    hint: 'Entidad',
-                    items: {
-                      null: 'Todas',
-                      for (final e in _entidadesPlantel)
-                        e['id'] as int: e['nombre'] as String,
-                    },
-                    onChanged: (v) {
-                      setState(() => _entidadPlantelId = v);
-                      _cargarDatos();
-                    },
-                  ),
               ],
-            ),
-          ],
+            ],
+          ),
         ],
       ),
     );
@@ -683,11 +689,11 @@ class _AcuerdosPageState extends State<AcuerdosPage> {
   }
 
   bool _tieneFiltrosActivos() {
-    return _unidadGestionId != null ||
-        _entidadPlantelId != null ||
+    return _entidadPlantelId != null ||
         _tipoFiltro != null ||
         _activoFiltro != null ||
-        _origenFiltro != null;
+        _origenFiltro != null ||
+        _nombreFiltro.isNotEmpty;
   }
 
   Widget _buildEmptyState() {
@@ -719,20 +725,20 @@ class _AcuerdosPageState extends State<AcuerdosPage> {
             ),
             child: Row(
               children: [
-                _tableHeader('NOMBRE', flex: 3),
-                _tableHeader('TIPO', flex: 1),
-                _tableHeader('ENTIDAD', flex: 2),
-                _tableHeader('MONTO', flex: 2),
-                _tableHeader('MODALIDAD', flex: 1),
-                _tableHeader('FRECUENCIA', flex: 1),
+                _tableHeader('NOMBRE', flex: 3, sortKey: 'nombre'),
+                _tableHeader('TIPO', flex: 1, sortKey: 'tipo'),
+                _tableHeader('ENTIDAD', flex: 2, sortKey: '_entidad_nombre'),
+                _tableHeader('MONTO', flex: 2, sortKey: '_monto_sort'),
+                _tableHeader('MODALIDAD', flex: 1, sortKey: 'modalidad'),
+                _tableHeader('FRECUENCIA', flex: 1, sortKey: 'frecuencia'),
                 _tableHeader('PROGRESO', flex: 2),
-                _tableHeader('ESTADO', flex: 1),
+                _tableHeader('ESTADO', flex: 1, sortKey: 'activo'),
                 _tableHeader('', flex: 1), // acciones
               ],
             ),
           ),
           // Rows
-          ..._acuerdos.asMap().entries.map((entry) {
+          ..._acuerdosOrdenados.asMap().entries.map((entry) {
             try {
               return _buildStyledRow(entry.value, entry.key);
             } catch (e, stack) {
@@ -759,13 +765,88 @@ class _AcuerdosPageState extends State<AcuerdosPage> {
     );
   }
 
-  Widget _tableHeader(String label, {int flex = 1}) {
+  List<Map<String, dynamic>> get _acuerdosOrdenados {
+    var list = List<Map<String, dynamic>>.from(_acuerdos);
+
+    // Filtro por nombre (en-memoria)
+    if (_nombreFiltro.isNotEmpty) {
+      final query = _nombreFiltro.toLowerCase();
+      list = list.where((a) {
+        final nombre = (a['nombre'] as String? ?? '').toLowerCase();
+        return nombre.contains(query);
+      }).toList();
+    }
+    if (_sortColumn != null) {
+      list.sort((a, b) {
+        dynamic va;
+        dynamic vb;
+        if (_sortColumn == '_monto_sort') {
+          final modalidadA = a['modalidad']?.toString() ?? '';
+          va = (modalidadA == 'MONTO_TOTAL_CUOTAS'
+              ? (a['monto_total'] as num?)?.toDouble()
+              : (a['monto_periodico'] as num?)?.toDouble()) ??
+              0.0;
+          final modalidadB = b['modalidad']?.toString() ?? '';
+          vb = (modalidadB == 'MONTO_TOTAL_CUOTAS'
+              ? (b['monto_total'] as num?)?.toDouble()
+              : (b['monto_periodico'] as num?)?.toDouble()) ??
+              0.0;
+        } else {
+          va = a[_sortColumn!];
+          vb = b[_sortColumn!];
+        }
+        int cmp;
+        if (va == null && vb == null) {
+          cmp = 0;
+        } else if (va == null) {
+          cmp = -1;
+        } else if (vb == null) {
+          cmp = 1;
+        } else if (va is num && vb is num) {
+          cmp = va.compareTo(vb);
+        } else {
+          cmp = va.toString().toLowerCase().compareTo(vb.toString().toLowerCase());
+        }
+        return _sortAsc ? cmp : -cmp;
+      });
+    }
+    return list;
+  }
+
+  Widget _tableHeader(String label, {int flex = 1, String? sortKey}) {
+    final isActive = sortKey != null && _sortColumn == sortKey;
     return Expanded(
       flex: flex,
-      child: Text(
-        label,
-        style: AppText.label,
-      ),
+      child: sortKey == null
+          ? Text(label, style: AppText.label)
+          : GestureDetector(
+              onTap: () {
+                setState(() {
+                  if (_sortColumn == sortKey) {
+                    _sortAsc = !_sortAsc;
+                  } else {
+                    _sortColumn = sortKey;
+                    _sortAsc = true;
+                  }
+                });
+              },
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(label, style: AppText.label),
+                  const SizedBox(width: 4),
+                  Icon(
+                    isActive
+                        ? (_sortAsc ? Icons.arrow_upward : Icons.arrow_downward)
+                        : Icons.unfold_more,
+                    size: 14,
+                    color: isActive
+                        ? Theme.of(context).colorScheme.primary
+                        : Theme.of(context).colorScheme.outline,
+                  ),
+                ],
+              ),
+            ),
     );
   }
 
@@ -780,9 +861,13 @@ class _AcuerdosPageState extends State<AcuerdosPage> {
     final entidadNombre = acuerdo['_entidad_nombre']?.toString() ?? '-';
     final stats = acuerdo['_stats'] as Map<String, dynamic>?;
 
+    final unidad = acuerdo['unidad']?.toString() ?? 'ARS';
     final montoDisplay = modalidad == 'MONTO_TOTAL_CUOTAS'
         ? (acuerdo['monto_total'] as num?)?.toDouble() ?? 0.0
         : (acuerdo['monto_periodico'] as num?)?.toDouble() ?? 0.0;
+    final montoTexto = unidad == 'LTS'
+        ? '${Format.numero(montoDisplay)} Lts'
+        : Format.money(montoDisplay);
 
     final cuotasConfirmadas = stats?['cuotas_confirmadas'] as int? ?? 0;
     final cuotasEsperadas = stats?['cuotas_esperadas'] as int? ?? 0;
@@ -879,7 +964,7 @@ class _AcuerdosPageState extends State<AcuerdosPage> {
             Expanded(
               flex: 2,
               child: Text(
-                Format.money(montoDisplay),
+                montoTexto,
                 style: AppText.monoBold.copyWith(color: tipoColor),
               ),
             ),
@@ -981,7 +1066,7 @@ class _AcuerdosPageState extends State<AcuerdosPage> {
   // ─── CARD VIEW ──────────────────────────────────────────────────────────────
   Widget _buildVistaTarjetas() {
     return Column(
-      children: _acuerdos.asMap().entries.map((entry) {
+      children: _acuerdosOrdenados.asMap().entries.map((entry) {
         try {
           return _buildTarjetaAcuerdo(entry.value);
         } catch (e, stack) {
@@ -1019,9 +1104,13 @@ class _AcuerdosPageState extends State<AcuerdosPage> {
     final entidadNombre = acuerdo['_entidad_nombre']?.toString();
     final stats = acuerdo['_stats'] as Map<String, dynamic>?;
 
+    final unidad = acuerdo['unidad']?.toString() ?? 'ARS';
     final montoDisplay = modalidad == 'MONTO_TOTAL_CUOTAS'
         ? (acuerdo['monto_total'] as num?)?.toDouble() ?? 0.0
         : (acuerdo['monto_periodico'] as num?)?.toDouble() ?? 0.0;
+    final montoTexto = unidad == 'LTS'
+        ? '${Format.numero(montoDisplay)} Lts'
+        : Format.money(montoDisplay);
 
     final cuotasConfirmadas = stats?['cuotas_confirmadas'] as int? ?? 0;
     final cuotasEsperadas = stats?['cuotas_esperadas'] as int? ?? 0;
@@ -1100,7 +1189,7 @@ class _AcuerdosPageState extends State<AcuerdosPage> {
               Row(
                 children: [
                   Text(
-                    Format.money(montoDisplay),
+                    montoTexto,
                     style: AppText.kpiSm.copyWith(color: tipoColor),
                   ),
                   const SizedBox(width: AppSpacing.md),
@@ -1297,7 +1386,7 @@ class _AcuerdosPageState extends State<AcuerdosPage> {
       context,
       MaterialPageRoute(
         builder: (ctx) =>
-            NuevoAcuerdoGrupalPage(unidadGestionId: _unidadGestionId ?? 1),
+            NuevoAcuerdoGrupalPage(unidadGestionId: 1),
       ),
     );
 

@@ -65,6 +65,22 @@ class MovimientosProyectadosService {
       final totalCuotas = compromiso['cuotas'] as int?;
       final entidadNombre = compromiso['entidad_nombre'] as String?;
 
+      // Obtener unidad del acuerdo (ARS o LTS) si el compromiso viene de un acuerdo
+      String unidadAcuerdo = 'ARS';
+      final acuerdoIdComp = compromiso['acuerdo_id'];
+      if (acuerdoIdComp != null) {
+        final acuerdos = await db.query(
+          'acuerdos',
+          columns: ['unidad'],
+          where: 'id = ?',
+          whereArgs: [acuerdoIdComp],
+          limit: 1,
+        );
+        if (acuerdos.isNotEmpty) {
+          unidadAcuerdo = (acuerdos.first['unidad'] as String?) ?? 'ARS';
+        }
+      }
+
       final cuotas = await db.query(
         'compromiso_cuotas',
         where: 'compromiso_id = ? AND estado = ?',
@@ -94,6 +110,7 @@ class MovimientosProyectadosService {
           observaciones: observaciones,
           unidadGestionId: unidadGestionId,
           entidadNombre: entidadNombre,
+          unidadAcuerdo: unidadAcuerdo,
         ));
       }
 
@@ -454,6 +471,7 @@ class MovimientoProyectado {
   final int unidadGestionId;
   final String estado; // 'ESPERADO' | 'CANCELADO'
   final String? entidadNombre; // Nombre del jugador/staff asociado
+  final String unidadAcuerdo; // 'ARS' | 'LTS'
   // Campos exclusivos de movimientos POR_EVENTO (compromisoId = 0)
   final int? acuerdoId;
   final int? eventoCdmId;
@@ -475,6 +493,7 @@ class MovimientoProyectado {
     required this.unidadGestionId,
     this.estado = 'ESPERADO',
     this.entidadNombre,
+    this.unidadAcuerdo = 'ARS',
     this.acuerdoId,
     this.eventoCdmId,
   });
@@ -494,6 +513,7 @@ class MovimientoProyectado {
       'unidad_gestion_id': unidadGestionId,
       'estado': estado,
       'entidad_nombre': entidadNombre,
+      'unidad_acuerdo': unidadAcuerdo,
       'acuerdo_id': acuerdoId,
       'evento_cdm_id': eventoCdmId,
     };

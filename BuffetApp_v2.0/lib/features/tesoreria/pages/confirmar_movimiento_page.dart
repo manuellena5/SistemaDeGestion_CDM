@@ -16,6 +16,8 @@ import 'dart:io';
 /// Página para confirmar un movimiento esperado como real.
 /// 
 /// Convierte un movimiento proyectado en un registro real en la base de datos.
+/// Si [unidadAcuerdo] es 'LTS', el formulario solicita litros + precio/lt
+/// y calcula el monto ARS automáticamente.
 class ConfirmarMovimientoPage extends StatefulWidget {
   final int compromisoId;
   final DateTime fechaVencimiento;
@@ -23,6 +25,7 @@ class ConfirmarMovimientoPage extends StatefulWidget {
   final String tipo;
   final String categoria;
   final int? numeroCuota; // Número de cuota a confirmar
+  final String unidadAcuerdo; // 'ARS' (default) o 'LTS'
   
   const ConfirmarMovimientoPage({
     super.key,
@@ -32,6 +35,7 @@ class ConfirmarMovimientoPage extends StatefulWidget {
     required this.tipo,
     required this.categoria,
     this.numeroCuota,
+    this.unidadAcuerdo = 'ARS',
   });
 
   @override
@@ -46,11 +50,15 @@ class _ConfirmarMovimientoPageState extends State<ConfirmarMovimientoPage> {
   // Controllers
   final _montoController = TextEditingController();
   final _observacionesController = TextEditingController();
+  // Campos exclusivos para acuerdos LTS (combustible)
+  final _litrosCtrl = TextEditingController();
+  final _precioLitroCtrl = TextEditingController();
   
   // Form values
   DateTime _fechaReal = DateTime.now();
   int? _medioPagoId;
   int? _cuentaId; // Cuenta desde la cual se paga
+  double? _montoArsCalculado; // solo usado cuando unidadAcuerdo == 'LTS'
   
   // Adjunto (puede ser imagen o PDF)
   File? _archivoLocal;
@@ -68,14 +76,33 @@ class _ConfirmarMovimientoPageState extends State<ConfirmarMovimientoPage> {
   void initState() {
     super.initState();
     _fechaReal = widget.fechaVencimiento;
-    _montoController.text = widget.montoSugerido.toString();
+    if (widget.unidadAcuerdo == 'LTS') {
+      // Para acuerdos en litros, la sugerencia es la cantidad de litros esperados
+      _litrosCtrl.text = widget.montoSugerido.toStringAsFixed(2);
+      _litrosCtrl.addListener(_recalcularMonto);
+      _precioLitroCtrl.addListener(_recalcularMonto);
+    } else {
+      _montoController.text = widget.montoSugerido.toString();
+    }
     _cargarDatos();
+  }
+
+  void _recalcularMonto() {
+    final litros = double.tryParse(_litrosCtrl.text.replaceAll(',', '.'));
+    final precio = double.tryParse(_precioLitroCtrl.text.replaceAll(',', '.'));
+    setState(() {
+      _montoArsCalculado = (litros != null && precio != null && litros > 0 && precio > 0)
+          ? litros * precio
+          : null;
+    });
   }
 
   @override
   void dispose() {
     _montoController.dispose();
     _observacionesController.dispose();
+    _litrosCtrl.dispose();
+    _precioLitroCtrl.dispose();
     super.dispose();
   }
 
@@ -248,7 +275,38 @@ class _ConfirmarMovimientoPageState extends State<ConfirmarMovimientoPage> {
         throw StateError('No hay unidad de gestión activa');
       }
 
-      final monto = double.parse(_montoController.text);
+      // Calcular monto ARS y campos LTS según la unidad del acuerdo
+      double monto;
+      double? cantidadLitros;
+      double? precioLitroArs;
+
+      if (widget.unidadAcuerdo == 'LTS') {
+        final litros = double.tryParse(_litrosCtrl.text.replaceAll(',', '.'));
+        final precio = double.tryParse(_precioLitroCtrl.text.replaceAll(',', '.'));
+        if (litros == null || litros <= 0) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Ingresá una cantidad de litros válida')),
+            );
+          }
+          setState(() => _isSubmitting = false);
+          return;
+        }
+        if (precio == null || precio <= 0) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Ingresá un precio por litro válido')),
+            );
+          }
+          setState(() => _isSubmitting = false);
+          return;
+        }
+        cantidadLitros = litros;
+        precioLitroArs = precio;
+        monto = litros * precio;
+      } else {
+        monto = double.parse(_montoController.text);
+      }
 
       // H.6: Operación transaccional — crea movimiento + actualiza cuota + incrementa contador
       await _compromisosService.confirmarCuota(
@@ -269,6 +327,8 @@ class _ConfirmarMovimientoPageState extends State<ConfirmarMovimientoPage> {
         archivoLocalPath: _archivoLocal?.path,
         archivoNombre: _archivoNombre,
         archivoTipo: _archivoTipo,
+        cantidadLitros: cantidadLitros,
+        precioLitroArs: precioLitroArs,
       );
 
       if (mounted) {
@@ -377,31 +437,157 @@ class _ConfirmarMovimientoPageState extends State<ConfirmarMovimientoPage> {
               ),
               const SizedBox(height: 16),
               
-              // Monto real
-              TextFormField(
-                controller: _montoController,
-                decoration: const InputDecoration(
-                  labelText: 'Monto real *',
-                  hintText: 'Ingresá el monto efectivo',
-                  border: OutlineInputBorder(),
-                  prefixIcon: Icon(Icons.attach_money),
+              // Monto — bloque condicional según unidad del acuerdo
+              if (widget.unidadAcuerdo == 'LTS') ...[
+                // Banner informativo
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.blue.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.local_gas_station, color: Colors.blue.shade700, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Acuerdo en litros — ingresá la cantidad entregada y el precio del día. '
+                          'El monto en pesos se calcula automáticamente.',
+                          style: TextStyle(color: Colors.blue.shade800, fontSize: 13),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                inputFormatters: [
-                  FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}')),
-                ],
-                validator: (v) {
-                  if (v == null || v.trim().isEmpty) {
-                    return 'Requerido';
-                  }
-                  final monto = double.tryParse(v);
-                  if (monto == null || monto <= 0) {
-                    return 'Debe ser mayor a cero';
-                  }
-                  return null;
-                },
-                enabled: !_isSubmitting,
-              ),
+                const SizedBox(height: 12),
+                // Litros entregados
+                TextFormField(
+                  controller: _litrosCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,3}')),
+                  ],
+                  decoration: const InputDecoration(
+                    labelText: 'Litros entregados *',
+                    hintText: 'Ej: 10',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.local_gas_station),
+                    suffixText: 'lts',
+                  ),
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) return 'Requerido';
+                    final val = double.tryParse(v.replaceAll(',', '.'));
+                    if (val == null || val <= 0) return 'Debe ser mayor a 0';
+                    return null;
+                  },
+                  enabled: !_isSubmitting,
+                ),
+                const SizedBox(height: 12),
+                // Precio por litro
+                TextFormField(
+                  controller: _precioLitroCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}')),
+                  ],
+                  decoration: const InputDecoration(
+                    labelText: 'Precio por litro *',
+                    hintText: 'Ej: 1897',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.attach_money),
+                    prefixText: '\$ ',
+                    suffixText: '/lt',
+                  ),
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) return 'Requerido';
+                    final val = double.tryParse(v.replaceAll(',', '.'));
+                    if (val == null || val <= 0) return 'Debe ser mayor a 0';
+                    return null;
+                  },
+                  enabled: !_isSubmitting,
+                ),
+                const SizedBox(height: 12),
+                // Monto ARS calculado (read-only)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+                  decoration: BoxDecoration(
+                    color: _montoArsCalculado != null
+                        ? Colors.green.shade50
+                        : Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: _montoArsCalculado != null
+                          ? Colors.green.shade300
+                          : Colors.grey.shade300,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.calculate,
+                        color: _montoArsCalculado != null
+                            ? Colors.green.shade700
+                            : Colors.grey,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 10),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Monto a registrar (en pesos)',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _montoArsCalculado != null
+                                ? '\$ ${_montoArsCalculado!.toStringAsFixed(2)}'
+                                : 'Completá litros y precio',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: _montoArsCalculado != null
+                                  ? Colors.green.shade800
+                                  : Colors.grey,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ] else ...[
+                // Flujo ARS estándar
+                TextFormField(
+                  controller: _montoController,
+                  decoration: const InputDecoration(
+                    labelText: 'Monto real *',
+                    hintText: 'Ingresá el monto efectivo',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.attach_money),
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}')),
+                  ],
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) {
+                      return 'Requerido';
+                    }
+                    final monto = double.tryParse(v);
+                    if (monto == null || monto <= 0) {
+                      return 'Debe ser mayor a cero';
+                    }
+                    return null;
+                  },
+                  enabled: !_isSubmitting,
+                ),
+              ],
               const SizedBox(height: 16),
               
               // Medio de pago

@@ -185,7 +185,8 @@ class PlantelImportExportService {
           final rol = sheet.cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: i)).value?.toString().trim().toUpperCase();
           final contacto = sheet.cell(CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: i)).value?.toString().trim();
           final dni = sheet.cell(CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: i)).value?.toString().trim();
-          final fechaNacStr = sheet.cell(CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: i)).value?.toString().trim();
+          final rawFechaNac = sheet.cell(CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: i)).value;
+          final fechaNacStr = rawFechaNac?.toString().trim();
           final alias = sheet.cell(CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: i)).value?.toString().trim();
           final tipoContratacion = sheet.cell(CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: i)).value?.toString().trim().toUpperCase();
           final posicion = sheet.cell(CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: i)).value?.toString().trim().toUpperCase();
@@ -217,20 +218,44 @@ class PlantelImportExportService {
           }
 
           // Parsear fecha de nacimiento
+          // Nota: excel ^2.x no expone DateCellValue/DateTimeCellValue;
+          // las celdas de fecha llegan siempre como String ya formateado.
           String? fechaNacimiento;
-          if (fechaNacStr != null && fechaNacStr.isNotEmpty) {
+          if (rawFechaNac != null) {
             try {
-              // Intentar parsear DD/MM/YYYY
-              final parts = fechaNacStr.split('/');
-              if (parts.length == 3) {
-                final dia = int.parse(parts[0]);
-                final mes = int.parse(parts[1]);
-                final anio = int.parse(parts[2]);
-                final fecha = DateTime(anio, mes, dia);
-                fechaNacimiento = DateFormat('yyyy-MM-dd').format(fecha);
+              if (fechaNacStr != null && fechaNacStr.isNotEmpty) {
+                final parts = fechaNacStr.split('/');
+                if (parts.length == 3) {
+                  final p0 = int.parse(parts[0]);
+                  final p1 = int.parse(parts[1]);
+                  final p2 = int.parse(parts[2]);
+                  // Detectar formato por descarte:
+                  // - Si p0 > 12 → solo puede ser DD/MM/YYYY
+                  // - Si p1 > 12 → solo puede ser MM/DD/YYYY
+                  // - Ambiguo (ambos ≤ 12) → asumir DD/MM/YYYY (convención Argentina)
+                  int dia, mes, anio;
+                  if (p0 > 12) {
+                    dia = p0; mes = p1; anio = p2; // DD/MM/YYYY
+                  } else if (p1 > 12) {
+                    mes = p0; dia = p1; anio = p2; // MM/DD/YYYY
+                  } else {
+                    dia = p0; mes = p1; anio = p2; // DD/MM/YYYY por defecto
+                  }
+                  if (mes < 1 || mes > 12 || dia < 1 || dia > 31) {
+                    throw FormatException('Fecha fuera de rango');
+                  }
+                  final fecha = DateTime(anio, mes, dia);
+                  fechaNacimiento = DateFormat('yyyy-MM-dd').format(fecha);
+                } else {
+                  // Intentar formato ISO YYYY-MM-DD
+                  final isoDate = DateTime.tryParse(fechaNacStr);
+                  if (isoDate != null) {
+                    fechaNacimiento = DateFormat('yyyy-MM-dd').format(isoDate);
+                  }
+                }
               }
             } catch (_) {
-              errores.add('Fila ${i + 1}: Fecha de nacimiento inválida "$fechaNacStr". Use formato DD/MM/YYYY');
+              errores.add('Fila ${i + 1}: Fecha de nacimiento inválida "$fechaNacStr". Use formato DD/MM/YYYY (ej: 15/03/1995)');
               continue;
             }
           }

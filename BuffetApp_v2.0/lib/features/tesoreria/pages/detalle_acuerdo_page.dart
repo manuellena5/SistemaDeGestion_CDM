@@ -43,6 +43,14 @@ class _DetalleAcuerdoPageState extends State<DetalleAcuerdoPage> {
   Map<String, dynamic>? _historico;
   List<Map<String, dynamic>> _acuerdosHermanos = [];
 
+  /// Formatea un monto considerando si el acuerdo es en LTS (litros) o ARS.
+  String _fmtMonto(double v) {
+    if ((_acuerdo?['unidad'] as String?) == 'LTS') {
+      return '${v.toStringAsFixed(2)} lts';
+    }
+    return Format.money(v);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -703,7 +711,7 @@ class _DetalleAcuerdoPageState extends State<DetalleAcuerdoPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       _buildInfoRow('Modalidad', _modalidadLabel(modalidad), Icons.payment),
-                      _buildInfoRow('Monto', Format.money(montoDisplay), Icons.attach_money),
+                      _buildInfoRow('Monto', _fmtMonto(montoDisplay), Icons.attach_money),
                       _buildInfoRow('Frecuencia', frecuencia, Icons.schedule),
                       if (frecuenciaDias != null)
                         _buildInfoRow('Semanal', frecuenciaDias == 7 ? 'Sí' : 'No', Icons.event_repeat),
@@ -842,7 +850,7 @@ class _DetalleAcuerdoPageState extends State<DetalleAcuerdoPage> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      Format.money(montoEsperado),
+                      _fmtMonto(montoEsperado),
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
                             fontWeight: FontWeight.bold,
                             color: Colors.orange,
@@ -858,7 +866,7 @@ class _DetalleAcuerdoPageState extends State<DetalleAcuerdoPage> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      Format.money(montoConfirmado),
+                      _fmtMonto(montoConfirmado),
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
                             fontWeight: FontWeight.bold,
                             color: Colors.green,
@@ -1084,7 +1092,7 @@ class _DetalleAcuerdoPageState extends State<DetalleAcuerdoPage> {
                       entidadNombre,
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
-                    subtitle: Text(Format.money(monto)),
+                    subtitle: Text(_fmtMonto(monto)),
                     trailing: const Icon(Icons.arrow_forward, size: 16),
                     onTap: () {
                       Navigator.pushReplacement(

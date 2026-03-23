@@ -180,6 +180,8 @@ class _CajaPageState extends State<CajaPage> {
     final obsApertura =
         ((_caja!['observaciones_apertura'] as String?) ?? '').trim();
     final obsCierre = ((_caja!['obs_cierre'] as String?) ?? '').trim();
+    final obsPostCierre = ((_caja!['obs_post_cierre'] as String?) ?? '').trim();
+    final obsPostCierreTs = ((_caja!['obs_post_cierre_ts'] as String?) ?? '').trim();
 
     final fondo = ((_caja!['fondo_inicial'] as num?) ?? 0).toDouble();
     final efectivoDeclarado =
@@ -639,6 +641,25 @@ class _CajaPageState extends State<CajaPage> {
                           const SizedBox(height: 6),
                           _kv('Observación cierre', obsCierre, italicValue: true),
                         ],
+                        if (obsPostCierre.isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          _kv(
+                            'Obs. post-cierre${obsPostCierreTs.isNotEmpty ? ' ($obsPostCierreTs)' : ''}',
+                            obsPostCierre,
+                            italicValue: true,
+                          ),
+                        ],
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: () => _mostrarDialogoObsPostCierre(),
+                            icon: const Icon(Icons.edit_note, size: 18),
+                            label: Text(obsPostCierre.isEmpty
+                                ? 'Agregar observación post-cierre'
+                                : 'Editar observación post-cierre'),
+                          ),
+                        ),
                       ],
                     );
                   },
@@ -652,7 +673,7 @@ class _CajaPageState extends State<CajaPage> {
                 initiallyExpanded: true,
                 child: Builder(
                   builder: (context) {
-                    final resultadoNeto = ventasEfec + ventasTransf + _movIngresos - _movRetiros;
+                    final resultadoNeto = ventasEfec + ventasTransf + _movIngresos - _movRetiros - fondo;
                     // Diferencias por medio de pago (con desglose de movimientos)
                     final cajaEsperadaRes = fondo + ventasEfec + _movIngresosEfectivo - _movRetirosEfectivo;
                     final difEfectivoRes = efectivoDeclarado - cajaEsperadaRes;
@@ -666,6 +687,7 @@ class _CajaPageState extends State<CajaPage> {
                         _kvRow(context, 'Ventas por transferencia', formatCurrency(ventasTransf)),
                         _kvRow(context, '+ Otros ingresos', formatCurrency(_movIngresos)),
                         _kvRow(context, '- Retiros', '(${formatCurrency(_movRetiros)})'),
+                        _kvRow(context, '- Saldo inicial caja', '(${formatCurrency(fondo)})'),
                         const Divider(height: 16),
                         Row(
                           children: [
@@ -675,7 +697,7 @@ class _CajaPageState extends State<CajaPage> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '(${formatCurrency(ventasEfec)} + ${formatCurrency(ventasTransf)} + ${formatCurrency(_movIngresos)} - ${formatCurrency(_movRetiros)})',
+                          '(${formatCurrency(ventasEfec)} + ${formatCurrency(ventasTransf)} + ${formatCurrency(_movIngresos)} - ${formatCurrency(_movRetiros)} - ${formatCurrency(fondo)})',
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
                         ),
                         const Divider(height: 16),
@@ -1083,7 +1105,7 @@ class _CajaPageState extends State<CajaPage> {
               const SizedBox(height: 10),
               // RESULTADO ECONÓMICO DEL EVENTO
               () {
-                final resultadoNetoDialog = ventasEfectivoDialog + ventasTransfDialog + ingresos - retiros;
+                final resultadoNetoDialog = ventasEfectivoDialog + ventasTransfDialog + ingresos - retiros - fondo;
                 // Diferencias por medio de pago (con desglose de movimientos)
                 final difEfDialog = eff - cajaEsperadaDialog;
                 final difTrDialog = tr - transfEsperadaDialog;
@@ -1097,9 +1119,10 @@ class _CajaPageState extends State<CajaPage> {
                     Text('Ventas por transferencia: ${formatCurrency(ventasTransfDialog)}'),
                     Text('Otros ingresos:           ${formatCurrency(ingresos)}'),
                     Text('Retiros:                 (${formatCurrency(retiros)})'),
+                    Text('Saldo inicial caja:      (${formatCurrency(fondo)})'),
                     Text('RESULTADO NETO: ${formatCurrency(resultadoNetoDialog)}',
                         style: const TextStyle(fontWeight: FontWeight.w900)),
-                    Text('(${formatCurrency(ventasEfectivoDialog)} + ${formatCurrency(ventasTransfDialog)} + ${formatCurrency(ingresos)} - ${formatCurrency(retiros)})',
+                    Text('(${formatCurrency(ventasEfectivoDialog)} + ${formatCurrency(ventasTransfDialog)} + ${formatCurrency(ingresos)} - ${formatCurrency(retiros)} - ${formatCurrency(fondo)})',
                         style: TextStyle(fontSize: 11, color: AppColors.textMuted)),
                     const SizedBox(height: 8),
                     Text('RESULTADO NETO + DIFERENCIAS', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13)),
@@ -1247,6 +1270,70 @@ class _CajaPageState extends State<CajaPage> {
           'disciplina': disciplina,
         },
       );
+    }
+  }
+
+  Future<void> _mostrarDialogoObsPostCierre() async {
+    final cajaId = _cajaId;
+    if (cajaId == null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final currentObs = ((_caja?['obs_post_cierre'] as String?) ?? '').trim();
+    final controller = TextEditingController(text: currentObs);
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Observación post-cierre'),
+        content: TextField(
+          controller: controller,
+          maxLines: 4,
+          decoration: const InputDecoration(
+            hintText: 'Ingresá la observación...',
+            border: OutlineInputBorder(),
+          ),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Guardar'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (ok != true || !mounted) return;
+
+    try {
+      await _svc.guardarObsPostCierre(
+        cajaId: cajaId,
+        observacion: controller.text,
+      );
+      await _load();
+      if (mounted) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Observación guardada correctamente')),
+        );
+      }
+    } catch (e, st) {
+      await AppDatabase.logLocalError(
+        scope: 'caja_page.guardar_obs_post_cierre',
+        error: e.toString(),
+        stackTrace: st,
+        payload: {'cajaId': cajaId},
+      );
+      if (mounted) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('No se pudo guardar la observación. Intentá nuevamente.'),
+            backgroundColor: AppColors.egreso,
+          ),
+        );
+      }
     }
   }
 

@@ -1531,6 +1531,77 @@ class ExportService {
         row++;
       }
 
+      // ─── DETALLE DE MOVIMIENTOS ───
+      _section('DETALLE DE MOVIMIENTOS');
+      if (movimientos.isEmpty) {
+        sheet
+            .cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row))
+            .value = 'Sin movimientos registrados';
+        row++;
+      } else {
+        final movHeaders = [
+          'Fecha/Hora',
+          'Tipo',
+          'Monto',
+          'Medio de Pago',
+          'Observación'
+        ];
+        for (var i = 0; i < movHeaders.length; i++) {
+          sheet
+              .cell(
+                  CellIndex.indexByColumnRow(columnIndex: i, rowIndex: row))
+            ..value = movHeaders[i]
+            ..cellStyle = headerStyle;
+        }
+        row++;
+        for (final m in movimientos) {
+          final tipo = (m['tipo'] ?? '').toString().toUpperCase();
+          final monto = ((m['monto'] as num?) ?? 0).toDouble();
+          final medioPago =
+              (m['medio_pago_desc'] ?? m['medio_pago'] ?? '').toString();
+          final obs = (m['observacion'] as String?)?.trim() ?? '';
+          String fechaHora = '';
+          final ts = m['created_ts'];
+          if (ts != null) {
+            try {
+              final dt = DateTime.fromMillisecondsSinceEpoch(
+                      (ts as num).toInt(),
+                      isUtc: true)
+                  .toLocal();
+              fechaHora =
+                  '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year} '
+                  '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+            } catch (_) {}
+          }
+          sheet
+              .cell(CellIndex.indexByColumnRow(
+                  columnIndex: 0, rowIndex: row))
+              .value = fechaHora;
+          final tipoCell = sheet.cell(
+              CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: row));
+          tipoCell.value = tipo;
+          tipoCell.cellStyle = CellStyle(
+              fontColorHex:
+                  tipo == 'INGRESO' ? '#2E7D32' : '#C62828');
+          final montoCell = sheet.cell(
+              CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: row));
+          montoCell.value = monto;
+          montoCell.cellStyle = CellStyle(
+              bold: true,
+              fontColorHex:
+                  tipo == 'INGRESO' ? '#2E7D32' : '#C62828');
+          sheet
+              .cell(CellIndex.indexByColumnRow(
+                  columnIndex: 3, rowIndex: row))
+              .value = medioPago;
+          sheet
+              .cell(CellIndex.indexByColumnRow(
+                  columnIndex: 4, rowIndex: row))
+              .value = obs;
+          row++;
+        }
+      }
+
       // ─── CONCILIACIÓN POR MEDIO DE PAGO ───
       _section('CONCILIACIÓN POR MEDIO DE PAGO');
 
@@ -1588,11 +1659,12 @@ class ExportService {
 
       // ─── RESULTADO ECONÓMICO DEL EVENTO ───
       _section('RESULTADO ECONÓMICO DEL EVENTO');
-      final resultadoNeto = ventasEfec + ventasTransf + movIngresos - movRetiros;
+      final resultadoNeto = ventasEfec + ventasTransf + movIngresos - movRetiros - fondo;
       _labelMoney('Ventas en Efectivo', ventasEfec);
       _labelMoney('Ventas por Transferencia', ventasTransf);
       _labelMoney('Otros Ingresos', movIngresos);
       _labelMoney('Retiros', movRetiros, negative: true);
+      _labelMoney('Saldo Inicial', fondo, negative: true);
       row++;
       // Resultado neto con estilo destacado
       {

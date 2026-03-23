@@ -11,6 +11,7 @@ import '../../shared/format.dart';
 import '../services/adhesiones_service.dart';
 import 'confirmar_movimiento_page.dart';
 import 'crear_acuerdo_page.dart';
+import 'importar_adhesiones_page.dart';
 
 /// Pantalla de seguimiento de Adhesiones (aportes de adherentes).
 ///
@@ -130,10 +131,57 @@ class _AdhesionesPageState extends State<AdhesionesPage>
     }
   }
 
-  Future<void> _irACrearAcuerdo() async {
+  /// Muestra el diálogo para elegir entre agregar una adhesión individual
+  /// o realizar una carga masiva desde un archivo Excel.
+  Future<void> _mostrarMenuAgregarAdhesion() async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Agregar Adhesión'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _irACrearAcuerdoIndividual();
+            },
+            child: const ListTile(
+              leading: Icon(Icons.person_add_outlined),
+              title: Text('Individual'),
+              subtitle: Text('Agregar un acuerdo de forma manual'),
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _irACargaMasiva();
+            },
+            child: const ListTile(
+              leading: Icon(Icons.upload_file_outlined),
+              title: Text('Carga masiva'),
+              subtitle: Text('Importar múltiples acuerdos desde un archivo Excel'),
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _irACrearAcuerdoIndividual() async {
     final resultado = await Navigator.push<bool>(
       context,
       MaterialPageRoute(builder: (_) => const CrearAcuerdoPage()),
+    );
+    if (resultado == true && mounted) {
+      _cargarDatos();
+    }
+  }
+
+  Future<void> _irACargaMasiva() async {
+    final resultado = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const ImportarAdhesionesPage()),
     );
     if (resultado == true && mounted) {
       _cargarDatos();
@@ -218,7 +266,7 @@ class _AdhesionesPageState extends State<AdhesionesPage>
         ),
         const SizedBox(width: 4),
         FilledButton.icon(
-          onPressed: _irACrearAcuerdo,
+          onPressed: _mostrarMenuAgregarAdhesion,
           icon: const Icon(Icons.add, size: 18),
           label: const Text('Agregar Adhesión'),
           style: FilledButton.styleFrom(
@@ -236,7 +284,7 @@ class _AdhesionesPageState extends State<AdhesionesPage>
                   title: 'No hay adhesiones registradas',
                   subtitle: 'Usá el botón "Agregar Adhesión" para crear un acuerdo',
                   action: TextButton.icon(
-                    onPressed: _irACrearAcuerdo,
+                    onPressed: _mostrarMenuAgregarAdhesion,
                     icon: const Icon(Icons.add),
                     label: const Text('Agregar Adhesión'),
                   ),
@@ -604,12 +652,19 @@ class _AdhesionesPageState extends State<AdhesionesPage>
     final esCancelado = (adherente['activo'] as int? ?? 1) == 0;
 
     // Calcular cobrado y resta para este adherente
+    // Para LTS: sumar cantidad_litros; para ARS: sumar monto_real
     double cobrado = 0;
     for (final cuota in cuotasMap.values) {
       if (cuota['estado'] == 'CONFIRMADO') {
-        cobrado += (cuota['monto_real'] as num?)?.toDouble()
-            ?? (cuota['monto_esperado'] as num?)?.toDouble()
-            ?? 0.0;
+        if (unidad == 'LTS') {
+          cobrado += (cuota['cantidad_litros'] as num?)?.toDouble()
+              ?? (cuota['monto_esperado'] as num?)?.toDouble()
+              ?? 0.0;
+        } else {
+          cobrado += (cuota['monto_real'] as num?)?.toDouble()
+              ?? (cuota['monto_esperado'] as num?)?.toDouble()
+              ?? 0.0;
+        }
       }
     }
     // Prometido: para cancelados solo lo ya cobrado (no hay más deuda)
@@ -760,17 +815,22 @@ class _AdhesionesPageState extends State<AdhesionesPage>
     if (yaConfirmado) {
       // Pagado — ¿completo o parcial? (igual para activos y cancelados)
       final montoReal = (cuota!['monto_real'] as num?)?.toDouble();
+      final cantLitros = (cuota['cantidad_litros'] as num?)?.toDouble();
       final montoEsp =
           (cuota['monto_esperado'] as num?)?.toDouble() ?? montoEsperado;
-      if (montoReal != null && montoReal < montoEsp) {
+      // Para LTS: comparar litros pagados vs litros esperados
+      // Para ARS: comparar monto_real vs monto_esperado
+      final double pagoActual = unidad == 'LTS'
+          ? (cantLitros ?? montoEsp)
+          : (montoReal ?? montoEsp);
+      if (pagoActual < montoEsp) {
         bgColor = const Color(0xFFFEF3C7); // amarillo claro
         textColor = const Color(0xFF92400E);
-        texto = _formatearMontoCorto(montoReal, unidad);
       } else {
         bgColor = const Color(0xFFD1FAE5); // verde claro
         textColor = const Color(0xFF065F46);
-        texto = _formatearMontoCorto(montoReal ?? montoEsp, unidad);
       }
+      texto = _formatearMontoCorto(pagoActual, unidad);
     } else if (esCancelado) {
       // Mes sin cobrar de un acuerdo cancelado → gris neutro
       bgColor = const Color(0xFFE5E7EB);
@@ -994,6 +1054,7 @@ class _AdhesionesPageState extends State<AdhesionesPage>
           tipo: tipo,
           categoria: categoria,
           numeroCuota: nroCuota,
+          unidadAcuerdo: unidad,
         ),
       ),
     );

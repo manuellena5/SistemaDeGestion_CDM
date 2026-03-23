@@ -1631,6 +1631,9 @@ class CompromisosService {
     String? archivoLocalPath,
     String? archivoNombre,
     String? archivoTipo,
+    // Campos para acuerdos en litros (unidad = 'LTS')
+    double? cantidadLitros,
+    double? precioLitroArs,
   }) async {
     try {
       final db = await AppDatabase.instance();
@@ -1669,12 +1672,14 @@ class CompromisosService {
           '''UPDATE compromiso_cuotas
              SET estado = 'CONFIRMADO',
                  monto_real = ?,
+                 cantidad_litros = ?,
+                 precio_litro_ars = ?,
                  updated_ts = ?
              WHERE compromiso_id = ?
                AND estado != 'CONFIRMADO'
                AND (numero_cuota = ? AND ? > 0
                     OR strftime('%Y-%m', fecha_programada) = ?)''',
-          [monto, now, compromisoId, numeroCuota, numeroCuota, anioMes],
+          [monto, cantidadLitros, precioLitroArs, now, compromisoId, numeroCuota, numeroCuota, anioMes],
         );
         // Si no hubo coincidencia intentar solo por mes (para cuotas creadas sin numero)
         if (updated == 0) {
@@ -1682,11 +1687,13 @@ class CompromisosService {
             '''UPDATE compromiso_cuotas
                SET estado = 'CONFIRMADO',
                    monto_real = ?,
+                   cantidad_litros = ?,
+                   precio_litro_ars = ?,
                    updated_ts = ?
                WHERE compromiso_id = ?
                  AND estado != 'CONFIRMADO'
                  AND strftime('%Y-%m', fecha_programada) = ?''',
-            [monto, now, compromisoId, anioMes],
+            [monto, cantidadLitros, precioLitroArs, now, compromisoId, anioMes],
           );
         }
 

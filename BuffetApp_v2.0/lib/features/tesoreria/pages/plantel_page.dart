@@ -142,7 +142,7 @@ class _PlantelPageState extends State<PlantelPage> {
         );
       }
     } finally {
-      setState(() => _cargando = false);
+      if (mounted) setState(() => _cargando = false);
     }
   }
 

@@ -172,6 +172,35 @@ class CajaService {
     }
   }
 
+  /// Guarda una observación post-cierre con la fecha/hora UTC actual.
+  Future<void> guardarObsPostCierre({
+    required int cajaId,
+    required String observacion,
+  }) async {
+    try {
+      final db = await AppDatabase.instance();
+      final ts = AppDatabase.nowUtcSqlString();
+      await db.update(
+        'caja_diaria',
+        {
+          'obs_post_cierre': observacion.trim().isEmpty ? null : observacion.trim(),
+          'obs_post_cierre_ts': observacion.trim().isEmpty ? null : ts,
+          'updated_ts': DateTime.now().toUtc().millisecondsSinceEpoch,
+        },
+        where: 'id=?',
+        whereArgs: [cajaId],
+      );
+    } catch (e, st) {
+      await AppDatabase.logLocalError(
+        scope: 'caja_service.guardarObsPostCierre',
+        error: e,
+        stackTrace: st,
+        payload: {'cajaId': cajaId},
+      );
+      rethrow;
+    }
+  }
+
   Future<void> cerrarCaja(
       {required int cajaId,
       required double efectivoEnCaja,

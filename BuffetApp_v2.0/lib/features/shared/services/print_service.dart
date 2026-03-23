@@ -176,6 +176,8 @@ class PrintService {
         ((c['conteo_transferencias_final'] as num?) ?? 0).toDouble();
     final obsApertura = (c['observaciones_apertura'] as String?) ?? '';
     final obsCierre = (c['obs_cierre'] as String?) ?? '';
+    final obsPostCierre = ((c['obs_post_cierre'] as String?) ?? '').trim();
+    final obsPostCierreTs = ((c['obs_post_cierre_ts'] as String?) ?? '').trim();
     final descripcionEvento = (c['descripcion_evento'] as String?) ?? '';
     final diferencia = ((c['diferencia'] as num?) ?? 0).toDouble();
     final int? entradasVendidas = (c['entradas'] as num?)?.toInt();
@@ -410,7 +412,7 @@ class PrintService {
                   if (desc.contains('efectivo')) vEfec += ((m['total'] as num?) ?? 0).toDouble();
                   if (desc.contains('transfer')) vTransf += ((m['total'] as num?) ?? 0).toDouble();
                 }
-                final resultadoNeto = vEfec + vTransf + ingTotal - retTotal;
+                final resultadoNeto = vEfec + vTransf + ingTotal - retTotal - fondo;
                 // Diferencias por medio de pago
                 final cajaEsperadaPdf = fondo + vEfec + movIngEfec - movRetEfec;
                 final difEfPdf = efectivoDeclarado - cajaEsperadaPdf;
@@ -428,11 +430,12 @@ class PrintService {
                     pw.Text('Otros ingresos transf.:   ${_formatCurrency(movIngTransf)}', style: s()),
                     pw.Text('Retiros efec.:           (${_formatCurrency(movRetEfec)})', style: s()),
                     pw.Text('Retiros transf.:         (${_formatCurrency(movRetTransf)})', style: s()),
+                    pw.Text('Saldo inicial caja:      (${_formatCurrency(fondo)})', style: s()),
                     pw.SizedBox(height: 2),
                     pw.Text('RESULTADO NETO: ${_formatCurrency(resultadoNeto)}',
                         style: s(true).copyWith(fontSize: 10)),
                     pw.Text(
-                        '(${_formatCurrency(vEfec)} + ${_formatCurrency(vTransf)} + ${_formatCurrency(ingTotal)} - ${_formatCurrency(retTotal)})',
+                        '(${_formatCurrency(vEfec)} + ${_formatCurrency(vTransf)} + ${_formatCurrency(ingTotal)} - ${_formatCurrency(retTotal)} - ${_formatCurrency(fondo)})',
                         style: s()),
                     pw.SizedBox(height: 6),
                     pw.Text('RESULTADO NETO + DIFERENCIAS', style: s(true)),
@@ -465,6 +468,13 @@ class PrintService {
                     '${(p['nombre'] ?? '')} x ${(p['cantidad'] ?? 0)} = ${_formatCurrency(((p['total'] as num?) ?? 0).toDouble())}',
                     style: s(),
                   )),
+              if (obsPostCierre.isNotEmpty) ...[  
+                pw.SizedBox(height: 6),
+                pw.Text('OBS. POST-CIERRE:', style: s(true)),
+                if (obsPostCierreTs.isNotEmpty)
+                  pw.Text('Fecha: $obsPostCierreTs', style: s()),
+                pw.Text(obsPostCierre, style: s()),
+              ],
             ],
           );
         },
@@ -1495,6 +1505,8 @@ class PrintService {
         ((c['conteo_transferencias_final'] as num?) ?? 0).toDouble();
     final obsApertura = (c['observaciones_apertura'] as String?) ?? '';
     final obsCierre = (c['obs_cierre'] as String?) ?? '';
+    final obsPostCierreEsc = ((c['obs_post_cierre'] as String?) ?? '').trim();
+    final obsPostCierre_tsEsc = ((c['obs_post_cierre_ts'] as String?) ?? '').trim();
     final descripcionEvento = (c['descripcion_evento'] as String?) ?? '';
     final diferencia = ((c['diferencia'] as num?) ?? 0).toDouble();
     final int? entradasVendidas = (c['entradas'] as num?)?.toInt();
@@ -1751,7 +1763,7 @@ class PrintService {
         ventasTransfEsc += ((m['total'] as num?) ?? 0).toDouble();
       }
     }
-    final resultadoNetoEsc = ventasEfecEsc + ventasTransfEsc + ingTotalEsc - retTotalEsc;
+    final resultadoNetoEsc = ventasEfecEsc + ventasTransfEsc + ingTotalEsc - retTotalEsc - fondo;
     boldOn();
     text('RESULTADO ECONOMICO DEL EVENTO');
     boldOff();
@@ -1761,10 +1773,11 @@ class PrintService {
     text('Otros ingresos transf.:   ${_formatCurrency(movIngTransfEsc)}');
     text('Retiros efec.:           (${_formatCurrency(movRetEfecEsc)})');
     text('Retiros transf.:         (${_formatCurrency(movRetTransfEsc)})');
+    text('Saldo inicial caja:      (${_formatCurrency(fondo)})');
     boldOn();
     text('RESULTADO NETO: ${_formatCurrency(resultadoNetoEsc)}');
     boldOff();
-    text('(${_formatCurrency(ventasEfecEsc)} + ${_formatCurrency(ventasTransfEsc)} + ${_formatCurrency(ingTotalEsc)} - ${_formatCurrency(retTotalEsc)})');
+    text('(${_formatCurrency(ventasEfecEsc)} + ${_formatCurrency(ventasTransfEsc)} + ${_formatCurrency(ingTotalEsc)} - ${_formatCurrency(retTotalEsc)} - ${_formatCurrency(fondo)})');
     feed();
     // --- RESULTADO NETO + DIFERENCIAS ---
     final resultadoConDifEsc = resultadoNetoEsc + difEfectivo + difTransf;
@@ -1791,6 +1804,14 @@ class PrintService {
       final cant = (p['cantidad'] ?? 0).toString();
       final tot = ((p['total'] as num?) ?? 0).toDouble();
       text('$name x $cant = ${_formatCurrency(tot)}');
+    }
+    if (obsPostCierreEsc.isNotEmpty) {
+      feed();
+      boldOn();
+      text('OBS. POST-CIERRE:');
+      boldOff();
+      if (obsPostCierre_tsEsc.isNotEmpty) text('Fecha: $obsPostCierre_tsEsc');
+      writeWrapped('', obsPostCierreEsc);
     }
     feed(2);
     b.add([0x1D, 0x56, 0x42, 0x00]); // corte parcial

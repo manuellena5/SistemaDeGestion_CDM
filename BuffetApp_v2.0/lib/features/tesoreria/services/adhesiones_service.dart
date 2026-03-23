@@ -239,6 +239,8 @@ class AdhesionesService {
     required int anio,
     required double monto,
     String? observacion,
+    double? cantidadLitros,
+    double? precioLitroArs,
   }) async {
     try {
       final db = await AppDatabase.instance();
@@ -279,6 +281,8 @@ class AdhesionesService {
           {
             'estado': 'CONFIRMADO',
             'monto_real': monto,
+            'cantidad_litros': cantidadLitros,
+            'precio_litro_ars': precioLitroArs,
             'updated_ts': now,
           },
           where: 'id = ?',
@@ -298,6 +302,8 @@ class AdhesionesService {
           'fecha_programada': fechaProgramada,
           'monto_esperado': monto,
           'monto_real': monto,
+          'cantidad_litros': cantidadLitros,
+          'precio_litro_ars': precioLitroArs,
           'estado': 'CONFIRMADO',
           'created_ts': now,
           'updated_ts': now,

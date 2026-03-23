@@ -44,6 +44,17 @@ class _DetalleCompromisoPageState extends State<DetalleCompromisoPage> {
   List<Map<String, dynamic>> _cuotas = [];
   bool _cuotasExpanded = true;
 
+  /// Unidad del acuerdo origen: 'ARS' o 'LTS'
+  String get _unidadAcuerdo => _acuerdoOrigen?['unidad'] as String? ?? 'ARS';
+
+  /// Formatea un valor según la unidad: litros o pesos ARS
+  String _formatearValor(double valor) {
+    if (_unidadAcuerdo == 'LTS') {
+      return '${valor.toStringAsFixed(2)} lts';
+    }
+    return Format.money(valor);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -383,7 +394,7 @@ class _DetalleCompromisoPageState extends State<DetalleCompromisoPage> {
             ),
             const Divider(),
             _buildInfoRow('Tipo', comp['tipo'] as String),
-            _buildInfoRow('Monto', Format.money(comp['monto'] as double)),
+            _buildInfoRow('Monto', _formatearValor((comp['monto'] as num?)?.toDouble() ?? 0.0)),
             _buildInfoRow('Frecuencia', comp['frecuencia'] as String),
             if (comp['frecuencia_dias'] != null)
               _buildInfoRow('Días', '${comp['frecuencia_dias']} días'),
@@ -446,6 +457,22 @@ class _DetalleCompromisoPageState extends State<DetalleCompromisoPage> {
               ),
               if (_cuotasRestantes != null)
                 _buildInfoRow('Restantes', '$_cuotasRestantes cuotas'),
+              // Para acuerdos LTS: mostrar litros pagados y remanente
+              if (_unidadAcuerdo == 'LTS')
+                Builder(builder: (_) {
+                  final litrosPagados = _cuotas
+                      .where((c) => c['estado'] == 'CONFIRMADO')
+                      .fold(0.0, (s, c) => s + ((c['cantidad_litros'] as num?)?.toDouble() ?? 0.0));
+                  final litrosEsperados = _cuotas.fold(
+                      0.0, (s, c) => s + ((c['monto_esperado'] as num?)?.toDouble() ?? 0.0));
+                  final litrosRemanentes = litrosEsperados - litrosPagados;
+                  return Column(
+                    children: [
+                      _buildInfoRow('Litros pagados', '${litrosPagados.toStringAsFixed(2)} lts'),
+                      _buildInfoRow('Litros remanente', '${litrosRemanentes.toStringAsFixed(2)} lts'),
+                    ],
+                  );
+                }),
             ] else
               _buildInfoRow('Cuotas', 'Sin límite (recurrente)'),
             if (_proximoVencimiento != null) ...[
@@ -467,6 +494,7 @@ class _DetalleCompromisoPageState extends State<DetalleCompromisoPage> {
                           montoSugerido: comp['monto'] as double,
                           tipo: comp['tipo'] as String,
                           categoria: comp['categoria'] as String? ?? '',
+                          unidadAcuerdo: _unidadAcuerdo,
                         ),
                       ),
                     );
@@ -569,7 +597,7 @@ class _DetalleCompromisoPageState extends State<DetalleCompromisoPage> {
                         DateFormat('dd/MM/yyyy').format(DateTime.parse(fechaProgramada)),
                       )),
                       DataCell(Text(
-                        '\$${NumberFormat('#,##0.00', 'es_AR').format(montoEsperado)}',
+                        _formatearValor(montoEsperado),
                       )),
                       DataCell(_buildEstadoBadge(estado)),
                       DataCell(
@@ -587,6 +615,7 @@ class _DetalleCompromisoPageState extends State<DetalleCompromisoPage> {
                                         montoSugerido: montoEsperado,
                                         tipo: comp['tipo'] as String,
                                         categoria: comp['categoria'] as String? ?? '',
+                                        unidadAcuerdo: _unidadAcuerdo,
                                       ),
                                     ),
                                   );
@@ -818,6 +847,7 @@ class _DetalleCompromisoPageState extends State<DetalleCompromisoPage> {
         final pagado = snapshot.data!['pagado'] ?? 0.0;
         final remanente = snapshot.data!['remanente'] ?? 0.0;
         final total = pagado + remanente;
+        final esLts = _unidadAcuerdo == 'LTS';
 
         return Card(
           color: context.appColors.infoDim,
@@ -838,7 +868,7 @@ class _DetalleCompromisoPageState extends State<DetalleCompromisoPage> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Pagado',
+                            esLts ? 'Litros Pagados' : 'Pagado',
                             style: TextStyle(
                               fontSize: 12,
                               color: context.appColors.textMuted,
@@ -847,7 +877,9 @@ class _DetalleCompromisoPageState extends State<DetalleCompromisoPage> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            Format.money(pagado),
+                            esLts
+                                ? '${pagado.toStringAsFixed(2)} lts'
+                                : Format.money(pagado),
                             style: TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
@@ -868,7 +900,7 @@ class _DetalleCompromisoPageState extends State<DetalleCompromisoPage> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Remanente',
+                            esLts ? 'Litros Remanentes' : 'Remanente',
                             style: TextStyle(
                               fontSize: 12,
                               color: context.appColors.textMuted,
@@ -877,7 +909,9 @@ class _DetalleCompromisoPageState extends State<DetalleCompromisoPage> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            Format.money(remanente),
+                            esLts
+                                ? '${remanente.toStringAsFixed(2)} lts'
+                                : Format.money(remanente),
                             style: TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
@@ -903,7 +937,9 @@ class _DetalleCompromisoPageState extends State<DetalleCompromisoPage> {
                         ),
                       ),
                       Text(
-                        Format.money(total),
+                        esLts
+                            ? '${total.toStringAsFixed(2)} lts'
+                            : Format.money(total),
                         style: const TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.bold,
@@ -921,6 +957,16 @@ class _DetalleCompromisoPageState extends State<DetalleCompromisoPage> {
   }
 
   Future<Map<String, double>> _calcularEstadoFinanciero(int compromisoId) async {
+    if (_unidadAcuerdo == 'LTS') {
+      // Para acuerdos LTS: usar cantidad_litros pagados y monto_esperado (en lts) remanente
+      final pagado = _cuotas
+          .where((c) => c['estado'] == 'CONFIRMADO')
+          .fold(0.0, (s, c) => s + ((c['cantidad_litros'] as num?)?.toDouble() ?? 0.0));
+      final remanente = _cuotas
+          .where((c) => c['estado'] == 'ESPERADO')
+          .fold(0.0, (s, c) => s + ((c['monto_esperado'] as num?)?.toDouble() ?? 0.0));
+      return {'pagado': pagado, 'remanente': remanente};
+    }
     final pagado = await _compromisosService.calcularMontoPagado(compromisoId);
     final remanente = await _compromisosService.calcularMontoRemanente(compromisoId);
     return {'pagado': pagado, 'remanente': remanente};
@@ -964,12 +1010,12 @@ class _DetalleCompromisoPageState extends State<DetalleCompromisoPage> {
             if (acuerdo['monto_total'] != null)
               _buildInfoRow(
                 'Monto Total',
-                Format.money((acuerdo['monto_total'] as num).toDouble()),
+                _formatearValor((acuerdo['monto_total'] as num).toDouble()),
               ),
             if (acuerdo['monto_periodico'] != null)
               _buildInfoRow(
                 'Monto Periódico',
-                Format.money((acuerdo['monto_periodico'] as num).toDouble()),
+                _formatearValor((acuerdo['monto_periodico'] as num).toDouble()),
               ),
             if (acuerdo['cuotas'] != null) ...[
               const SizedBox(height: 8),
